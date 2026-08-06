@@ -43,7 +43,7 @@ Worker 只连接代码中固定的三个 IPFS 网关，不接受自定义上游�
 | --- | --- |
 | Worker name | `z-library-proxy` |
 | Production branch | `master` |
-| Build command | 留空 |
+| Build command | `npm run build` |
 | Deploy command | `npm run deploy` |
 | Non-production branch deploy command | `npx wrangler versions upload`（默认值） |
 | Root directory | `/`（默认值） |
@@ -62,6 +62,12 @@ npm run dev
 ```
 
 Wrangler 默认在 `http://localhost:8787` 启动本地服务。源站当前可能返回 Cloudflare 验证或 `503`；本项目不会尝试绕过源站验证码、登录或其他访问控制。
+
+### 前端开发
+
+`/` 首页搜索界面是 [`frontend/`](./frontend) 下的 React + shadcn/ui（Tailwind CSS v4）单页应用。`npm run build` 会先执行 Vite 构建，再由 `scripts/generate-assets.mjs` 把 `frontend/dist/assets/app.js` 与 `app.css` 内嵌为 `src/assets.generated.js`（已加入 `.gitignore`），Worker 继续通过 `/__z/assets/app.js|css` 提供服务；`npm test`、`npm run deploy` 和 `npm run check` 都会自动先执行该构建。
+
+前端日常迭代可以另开一个终端运行 `npm run dev:frontend` 启动 Vite 开发服务器（默认 `http://localhost:5173`），它会把 `/__z` 开头的接口代理到 `wrangler dev` 的 `http://localhost:8787`。注入源站页面的工具栏与 IPFS 对话框仍为 `src/ui.js` 中的轻量原生脚本，不经过前端构建。
 
 ## 命令行部署（可选）
 

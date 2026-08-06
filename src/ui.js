@@ -1,3 +1,17 @@
+// The home page frontend is a React + shadcn/ui app built from frontend/.
+// Its bundles are embedded by scripts/generate-assets.mjs into this module.
+import { APP_CSS, APP_JS } from "./assets.generated.js";
+
+export { APP_CSS, APP_JS };
+
+// Applies the persisted theme before the React bundle loads to avoid a flash
+// of the wrong color scheme. Keep byte-for-byte in sync with frontend/index.html
+// and with THEME_INIT_SCRIPT_SHA256 below (verified by test/proxy.test.js).
+export const THEME_INIT_SCRIPT =
+  "(function(){try{var t=localStorage.getItem('zlp-theme')||'system';var d=t==='dark'||t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.classList.toggle('dark',d)}catch(e){}})();";
+
+export const THEME_INIT_SCRIPT_SHA256 = "+f4cXEXLdjyENhulfE+rzbQ4mpIrJlAopGekQf+BDyE=";
+
 function escapeHtml(value) {
   return value
     .replaceAll("&", "&amp;")
@@ -15,285 +29,17 @@ export function renderHomePage(query = "") {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
   <title>书库</title>
   <link rel="stylesheet" href="/__z/assets/app.css">
+  <script>${THEME_INIT_SCRIPT}</script>
 </head>
 <body>
-  <header class="app-bar">
-    <a class="brand" href="/">书库</a>
-    <nav aria-label="账户导航">
-      <a href="/login">源站账户</a>
-    </nav>
-  </header>
-  <main class="app-main" data-query="${safeQuery}">
-    <section class="search-area" aria-labelledby="search-title">
-      <h1 id="search-title">查找书籍</h1>
-      <form class="search-form" role="search">
-        <label class="sr-only" for="book-query">书名、作者或 ISBN</label>
-        <input id="book-query" name="q" value="${safeQuery}" maxlength="200" autocomplete="off" placeholder="书名、作者或 ISBN" required>
-        <button type="submit">搜索</button>
-      </form>
-      <div class="scope-switch" aria-label="搜索范围">
-        <button type="button" aria-pressed="true">开放资源</button>
-        <a id="source-search" href="/">授权书库</a>
-      </div>
-    </section>
-    <section class="results-area" aria-live="polite" hidden>
-      <div class="results-head">
-        <h2>开放资源</h2>
-        <p id="result-status"></p>
-      </div>
-      <div id="source-status" class="source-status"></div>
-      <ol id="book-results" class="book-list"></ol>
-    </section>
-  </main>
-  <script src="/__z/assets/app.js" defer></script>
+  <div id="root" data-query="${safeQuery}"></div>
+  <script type="module" src="/__z/assets/app.js"></script>
 </body>
 </html>`;
 }
-
-export const APP_CSS = String.raw`
-:root {
-  color-scheme: light;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #202522;
-  background: #f4f6f3;
-  font-synthesis: none;
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; background: #f4f6f3; }
-a { color: inherit; }
-button, input { font: inherit; letter-spacing: 0; }
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-
-.app-bar {
-  height: 58px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 max(20px, calc((100vw - 1040px) / 2));
-  background: #ffffff;
-  border-bottom: 1px solid #dfe4df;
-}
-.brand { font-size: 18px; font-weight: 750; text-decoration: none; color: #172019; }
-.app-bar nav a { font-size: 14px; color: #49524d; text-decoration: none; }
-.app-bar nav a:hover { color: #11653b; }
-
-.app-main { width: min(100% - 32px, 960px); margin: 0 auto; padding: 64px 0 80px; }
-.search-area { width: min(100%, 720px); margin: 0 auto; }
-.search-area h1 { margin: 0 0 20px; font-size: 40px; line-height: 1.12; letter-spacing: 0; text-align: center; }
-.search-form { display: grid; grid-template-columns: 1fr auto; height: 52px; background: #ffffff; border: 1px solid #aeb8b1; border-radius: 8px; overflow: hidden; box-shadow: 0 8px 26px rgba(36, 49, 40, 0.08); }
-.search-form:focus-within { border-color: #177245; box-shadow: 0 0 0 3px rgba(23, 114, 69, 0.14); }
-.search-form input { min-width: 0; padding: 0 16px; border: 0; outline: 0; color: #202522; background: transparent; }
-.search-form input::placeholder { color: #7c8580; }
-.search-form button { min-width: 88px; padding: 0 20px; border: 0; color: #ffffff; background: #176b42; cursor: pointer; font-weight: 700; }
-.search-form button:hover { background: #0f5935; }
-.search-form button:disabled { opacity: 0.62; cursor: wait; }
-
-.scope-switch { display: flex; justify-content: center; gap: 2px; width: fit-content; margin: 14px auto 0; padding: 3px; background: #e5e9e5; border-radius: 7px; }
-.scope-switch button, .scope-switch a { min-height: 32px; padding: 7px 13px; border: 0; border-radius: 5px; font-size: 13px; line-height: 18px; text-decoration: none; cursor: pointer; }
-.scope-switch button { color: #1d5f3c; background: #ffffff; box-shadow: 0 1px 2px rgba(26, 37, 30, 0.1); font-weight: 700; }
-.scope-switch a { color: #4c5650; background: transparent; }
-.scope-switch a:hover { color: #172019; background: #f1f3f1; }
-
-.results-area { margin-top: 52px; }
-.results-head { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; padding-bottom: 12px; border-bottom: 1px solid #d9ded9; }
-.results-head h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
-.results-head p { margin: 0; color: #69726d; font-size: 13px; }
-.source-status { display: flex; gap: 8px; min-height: 26px; padding: 12px 0 6px; color: #5e6762; font-size: 12px; }
-.source-status span { padding-right: 9px; border-right: 1px solid #ccd2cd; }
-.source-status span:last-child { border-right: 0; }
-
-.book-list { margin: 0; padding: 0; list-style: none; }
-.book-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 16px; min-height: 126px; padding: 16px 0; border-bottom: 1px solid #d9ded9; }
-.book-cover { width: 72px; height: 104px; object-fit: cover; background: #dde2dd; border: 1px solid #ced4cf; border-radius: 4px; }
-.book-cover-placeholder { display: grid; place-items: center; color: #7b847e; font-size: 11px; text-align: center; }
-.book-info { min-width: 0; padding-top: 2px; }
-.book-info h3 { margin: 0 0 6px; font-size: 16px; line-height: 1.35; letter-spacing: 0; overflow-wrap: anywhere; }
-.book-info h3 a { text-decoration: none; }
-.book-info h3 a:hover { color: #11653b; text-decoration: underline; }
-.book-meta { margin: 0 0 9px; color: #626b66; font-size: 13px; line-height: 1.45; }
-.book-tags { display: flex; flex-wrap: wrap; gap: 7px; color: #59625d; font-size: 11px; }
-.book-tags span { padding-right: 7px; border-right: 1px solid #c6ccc7; }
-.book-tags span:last-child { border-right: 0; }
-.book-actions { display: flex; align-items: flex-start; justify-content: flex-end; flex-wrap: wrap; gap: 7px; max-width: 210px; padding-top: 2px; }
-.book-actions a { min-height: 34px; padding: 7px 11px; border: 1px solid #aab3ad; border-radius: 6px; background: #ffffff; color: #26302a; font-size: 12px; font-weight: 700; text-decoration: none; }
-.book-actions a.primary { color: #ffffff; border-color: #176b42; background: #176b42; }
-.book-actions a:hover { border-color: #176b42; }
-.empty-state { padding: 54px 16px; color: #69726d; text-align: center; }
-
-@media (max-width: 680px) {
-  .app-bar { padding: 0 16px; }
-  .app-main { width: min(100% - 24px, 960px); padding-top: 42px; }
-  .search-area h1 { font-size: 28px; }
-  .search-form { height: 48px; }
-  .search-form button { min-width: 72px; padding: 0 14px; }
-  .results-area { margin-top: 40px; }
-  .book-row { grid-template-columns: 62px minmax(0, 1fr); gap: 12px; }
-  .book-cover { width: 62px; height: 90px; }
-  .book-actions { grid-column: 2; justify-content: flex-start; max-width: none; margin-top: -2px; }
-}
-`;
-
-export const APP_JS = String.raw`
-(function () {
-  var main = document.querySelector('.app-main');
-  var form = document.querySelector('.search-form');
-  var input = document.querySelector('#book-query');
-  var sourceLink = document.querySelector('#source-search');
-  var resultsArea = document.querySelector('.results-area');
-  var resultList = document.querySelector('#book-results');
-  var resultStatus = document.querySelector('#result-status');
-  var sourceStatus = document.querySelector('#source-status');
-  var submitButton = form.querySelector('button[type="submit"]');
-
-  function sourceSearchUrl(query) {
-    return '/s/' + encodeURIComponent(query.trim());
-  }
-
-  function setSourceLink(query) {
-    sourceLink.href = query.trim() ? sourceSearchUrl(query) : '/';
-  }
-
-  function safeUrl(value) {
-    try {
-      var url = new URL(value);
-      return url.protocol === 'https:' ? url.toString() : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  function textElement(tag, className, text) {
-    var element = document.createElement(tag);
-    if (className) element.className = className;
-    element.textContent = text;
-    return element;
-  }
-
-  function actionLink(label, href, primary) {
-    var link = document.createElement('a');
-    link.textContent = label;
-    link.href = safeUrl(href) || '#';
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    if (primary) link.className = 'primary';
-    return link;
-  }
-
-  function renderBook(book) {
-    var row = document.createElement('li');
-    row.className = 'book-row';
-
-    var coverUrl = safeUrl(book.cover);
-    var cover;
-    if (coverUrl) {
-      cover = document.createElement('img');
-      cover.className = 'book-cover';
-      cover.src = coverUrl;
-      cover.alt = '';
-      cover.loading = 'lazy';
-      cover.referrerPolicy = 'no-referrer';
-    } else {
-      cover = textElement('div', 'book-cover book-cover-placeholder', '暂无封面');
-    }
-
-    var info = document.createElement('div');
-    info.className = 'book-info';
-    var heading = document.createElement('h3');
-    var titleLink = actionLink(book.title, book.details, false);
-    heading.appendChild(titleLink);
-    info.appendChild(heading);
-    info.appendChild(textElement('p', 'book-meta', (book.authors || []).join('、') || '作者未知'));
-
-    var tags = document.createElement('div');
-    tags.className = 'book-tags';
-    tags.appendChild(textElement('span', '', book.sourceLabel));
-    tags.appendChild(textElement('span', '', book.rightsLabel));
-    if (book.year) tags.appendChild(textElement('span', '', String(book.year)));
-    if (book.languages && book.languages.length) {
-      tags.appendChild(textElement('span', '', book.languages.join(' / ').toUpperCase()));
-    }
-    info.appendChild(tags);
-
-    var actions = document.createElement('div');
-    actions.className = 'book-actions';
-    (book.downloads || []).slice(0, 3).forEach(function (download, index) {
-      actions.appendChild(actionLink(download.label, download.href, index === 0));
-    });
-    if (!book.downloads || !book.downloads.length) {
-      actions.appendChild(actionLink('阅读', book.details, true));
-    } else {
-      actions.appendChild(actionLink('详情', book.details, false));
-    }
-
-    row.appendChild(cover);
-    row.appendChild(info);
-    row.appendChild(actions);
-    return row;
-  }
-
-  function renderSourceStatus(sources) {
-    sourceStatus.replaceChildren();
-    var entries = [
-      ['Project Gutenberg', sources.gutenberg],
-      ['Open Library', sources.openlibrary]
-    ];
-    entries.forEach(function (entry) {
-      var status = entry[1].ok ? entry[1].count + ' 项' : '暂不可用';
-      sourceStatus.appendChild(textElement('span', '', entry[0] + ' ' + status));
-    });
-  }
-
-  async function search(query) {
-    var trimmed = query.trim();
-    if (!trimmed) return;
-
-    setSourceLink(trimmed);
-    history.replaceState(null, '', '/?q=' + encodeURIComponent(trimmed));
-    resultsArea.hidden = false;
-    resultList.replaceChildren();
-    resultStatus.textContent = '搜索中';
-    sourceStatus.replaceChildren();
-    submitButton.disabled = true;
-
-    try {
-      var response = await fetch('/__z/api/search?q=' + encodeURIComponent(trimmed), {
-        headers: { Accept: 'application/json' }
-      });
-      if (!response.ok) throw new Error('Search failed');
-      var payload = await response.json();
-      renderSourceStatus(payload.sources);
-      resultStatus.textContent = payload.results.length + ' 项结果';
-
-      if (!payload.results.length) {
-        resultList.appendChild(textElement('li', 'empty-state', '没有找到可公开阅读的结果'));
-        return;
-      }
-      payload.results.forEach(function (book) {
-        resultList.appendChild(renderBook(book));
-      });
-    } catch (_) {
-      resultStatus.textContent = '搜索暂不可用';
-      resultList.appendChild(textElement('li', 'empty-state', '开放资源服务暂时不可用'));
-    } finally {
-      submitButton.disabled = false;
-    }
-  }
-
-  form.addEventListener('submit', function (event) {
-    event.preventDefault();
-    search(input.value);
-  });
-  input.addEventListener('input', function () { setSourceLink(input.value); });
-
-  var initialQuery = main.dataset.query || '';
-  setSourceLink(initialQuery);
-  if (initialQuery) search(initialQuery);
-})();
-`;
 
 export const PATCH_CSS = String.raw`
 .zp-toolbar { position: sticky; top: 0; z-index: 2147483000; min-height: 56px; display: grid; grid-template-columns: auto minmax(180px, 620px) auto; align-items: center; gap: 18px; padding: 8px max(16px, calc((100vw - 1040px) / 2)); background: #ffffff; border-bottom: 1px solid #dce2dd; color: #202522; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }

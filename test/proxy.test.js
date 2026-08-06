@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import worker, {
@@ -6,7 +7,11 @@ import worker, {
   rewriteAbsoluteUrl,
   rewriteSetCookie,
 } from "../src/index.js";
-import { PATCH_JS } from "../src/ui.js";
+import {
+  PATCH_JS,
+  THEME_INIT_SCRIPT,
+  THEME_INIT_SCRIPT_SHA256,
+} from "../src/ui.js";
 
 const upstream = new URL("https://z-lib.sk");
 const proxy = new URL("https://books.example.com");
@@ -20,9 +25,27 @@ test("serves the minimal search home without contacting the upstream", async () 
 
   assert.equal(response.status, 200);
   assert.match(response.headers.get("Content-Security-Policy"), /script-src 'self'/);
-  assert.match(html, /查找书籍/);
-  assert.match(html, /value="alice"/);
+  assert.match(html, /<div id="root" data-query="alice"><\/div>/);
   assert.match(html, /\/__z\/assets\/app\.js/);
+  assert.match(html, /\/__z\/assets\/app\.css/);
+});
+
+test("keeps the theme init script in sync with its CSP hash", async () => {
+  const digest = createHash("sha256").update(THEME_INIT_SCRIPT).digest("base64");
+  assert.equal(digest, THEME_INIT_SCRIPT_SHA256);
+
+  const response = await worker.fetch(
+    new Request("https://books.example.com/"),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+  const html = await response.text();
+
+  assert.ok(
+    response.headers
+      .get("Content-Security-Policy")
+      .includes(`'sha256-${THEME_INIT_SCRIPT_SHA256}'`),
+  );
+  assert.ok(html.includes(`<script>${THEME_INIT_SCRIPT}</script>`));
 });
 
 test("rejects invalid CIDs before probing a gateway", async () => {

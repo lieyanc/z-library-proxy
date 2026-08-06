@@ -13,6 +13,7 @@ import {
   PATCH_JS,
   renderHomePage,
   renderSourceToolbar,
+  THEME_INIT_SCRIPT_SHA256,
 } from "./ui.js";
 
 const DEFAULT_UPSTREAM_ORIGIN = "https://z-lib.sk";
@@ -428,7 +429,7 @@ function handleHomeRequest(request, requestUrl) {
   return new Response(body, {
     headers: {
       "Cache-Control": "no-store",
-      "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self' https: data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      "Content-Security-Policy": `default-src 'self'; connect-src 'self'; img-src 'self' https: data:; script-src 'self' 'sha256-${THEME_INIT_SCRIPT_SHA256}'; style-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
       "Content-Type": "text/html; charset=utf-8",
       "Referrer-Policy": "strict-origin-when-cross-origin",
       "X-Content-Type-Options": "nosniff",
