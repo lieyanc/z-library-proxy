@@ -30,9 +30,9 @@ test("rejects pages that are not challenges", () => {
   assert.equal(parseChallenge(""), null);
 });
 
-test("solves the challenge and matches the token a real browser produced", () => {
+test("solves the challenge and matches the token a real browser produced", async () => {
   const challenge = parseChallenge(CHALLENGE_HTML);
-  const solution = solveChallenge(challenge);
+  const solution = await solveChallenge(challenge);
 
   // A real browser session stored c_token=5DF2217304C9448892E026858C3CB92E301A725E6494.
   assert.equal(solution.token, "5DF2217304C9448892E026858C3CB92E301A725E6494");

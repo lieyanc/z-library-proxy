@@ -20,76 +20,69 @@ const MAX_SOLVES_PER_REQUEST = 2;
 const RETRY_BACKOFF_MS = [150, 400];
 
 // ---------------------------------------------------------------------------
-// SHA-1, specialized for the PoW workload: single-block messages shorter than
-// 56 bytes, ASCII input. Returns the 20 digest bytes.
+// SHA-1 proof-of-work solving.
+//
+// Uses WebCrypto instead of pure JS: time spent inside crypto.subtle.digest
+// does not count against the Workers CPU limit, so a solve costs mostly
+// wall-clock time. Solving happens once per session per isolate and falls
+// back to letting the visitor's browser solve the challenge when it fails.
 // ---------------------------------------------------------------------------
 
-const SHA1_K = [0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6];
+const SOLVE_BATCH_SIZE = 256;
+const SOLVE_WALL_CLOCK_BUDGET_MS = 8000;
 
-function createSha1Digest() {
-  const words = new Int32Array(80);
-  const digest = new Uint8Array(20);
+function writeCandidate(block, saltBytes, i) {
+  block.set(saltBytes);
+  let value = i;
+  let digits = 1;
+  while (value >= 10) {
+    value = Math.floor(value / 10);
+    digits += 1;
+  }
+  value = i;
+  for (let p = digits - 1; p >= 0; p -= 1) {
+    block[saltBytes.length + p] = 0x30 + (value % 10);
+    value = Math.floor(value / 10);
+  }
+  return saltBytes.length + digits;
+}
 
-  return function digestSingleBlockBytes(block, messageLength) {
-    // block: Uint8Array(64) with the message bytes already in place. Padding
-    // and the length field are (re)applied here so callers may reuse `block`.
-    for (let i = messageLength; i < 60; i += 1) {
-      block[i] = 0;
-    }
-    block[messageLength] = 0x80;
-    const bitLength = messageLength * 8;
-    block[60] = 0;
-    block[61] = 0;
-    block[62] = bitLength >>> 8;
-    block[63] = bitLength & 0xff;
+export async function solveChallenge({ salt, index, byteA, byteB }) {
+  const saltBytes = new TextEncoder().encode(salt);
+  const template = new Uint8Array(64);
+  const startedAt = performance.now();
 
-    for (let i = 0; i < 16; i += 1) {
-      const j = i * 4;
-      words[i] = (block[j] << 24) | (block[j + 1] << 16) | (block[j + 2] << 8) | block[j + 3];
-    }
-    for (let t = 16; t < 80; t += 1) {
-      const x = words[t - 3] ^ words[t - 8] ^ words[t - 14] ^ words[t - 16];
-      words[t] = (x << 1) | (x >>> 31);
-    }
-
-    let a = 0x67452301;
-    let b = 0xefcdab89;
-    let c = 0x98badcfe;
-    let d = 0x10325476;
-    let e = 0xc3d2e1f0;
-
-    for (let t = 0; t < 80; t += 1) {
-      const round = t < 20 ? 0 : t < 40 ? 1 : t < 60 ? 2 : 3;
-      const f =
-        round === 0
-          ? (b & c) | (~b & d)
-          : round === 1
-            ? b ^ c ^ d
-            : round === 2
-              ? (b & c) | (b & d) | (c & d)
-              : b ^ c ^ d;
-      const temp = (((a << 5) | (a >>> 27)) + f + e + SHA1_K[round] + words[t]) | 0;
-      e = d;
-      d = c;
-      c = (b << 30) | (b >>> 2);
-      b = a;
-      a = temp;
+  for (let base = 0; base < MAX_SOLVE_ITERATIONS; base += SOLVE_BATCH_SIZE) {
+    const jobs = [];
+    const batchEnd = Math.min(base + SOLVE_BATCH_SIZE, MAX_SOLVE_ITERATIONS);
+    for (let i = base; i < batchEnd; i += 1) {
+      const length = writeCandidate(template, saltBytes, i);
+      jobs.push(crypto.subtle.digest("SHA-1", template.subarray(0, length)));
     }
 
-    const h0 = (0x67452301 + a) | 0;
-    const h1 = (0xefcdab89 + b) | 0;
-    const h2 = (0x98badcfe + c) | 0;
-    const h3 = (0x10325476 + d) | 0;
-    const h4 = (0xc3d2e1f0 + e) | 0;
-    const h = [h0, h1, h2, h3, h4];
-    for (let i = 0; i < 5; i += 1) {
-      digest[i * 4] = (h[i] >>> 24) & 0xff;
-      digest[i * 4 + 1] = (h[i] >>> 16) & 0xff;
-      digest[i * 4 + 2] = (h[i] >>> 8) & 0xff;
-      digest[i * 4 + 3] = h[i] & 0xff;
+    let digests;
+    try {
+      digests = await Promise.all(jobs);
+    } catch {
+      return null;
     }
-    return digest;
-  };
+
+    for (let k = 0; k < digests.length; k += 1) {
+      const bytes = new Uint8Array(digests[k]);
+      if (bytes[index] === byteA && bytes[index + 1] === byteB) {
+        return {
+          token: `${salt}${base + k}`,
+          seconds: (performance.now() - startedAt) / 1000,
+        };
+      }
+    }
+
+    if (performance.now() - startedAt > SOLVE_WALL_CLOCK_BUDGET_MS) {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,43 +117,6 @@ export function parseChallenge(html) {
     byteA,
     byteB,
   };
-}
-
-export function solveChallenge({ salt, index, byteA, byteB }) {
-  const saltBytes = new TextEncoder().encode(salt);
-  const block = new Uint8Array(64);
-  block.set(saltBytes);
-  const digestSingleBlockBytes = createSha1Digest();
-  const startedAt = performance.now();
-
-  for (let i = 0; i < MAX_SOLVE_ITERATIONS; i += 1) {
-    // Write the decimal digits of i right after the salt.
-    let value = i;
-    let digits = 1;
-    while (value >= 10) {
-      value = Math.floor(value / 10);
-      digits += 1;
-    }
-    const messageLength = saltBytes.length + digits;
-    if (messageLength > 55) {
-      return null;
-    }
-    value = i;
-    for (let p = digits - 1; p >= 0; p -= 1) {
-      block[saltBytes.length + p] = 0x30 + (value % 10);
-      value = Math.floor(value / 10);
-    }
-
-    const digest = digestSingleBlockBytes(block, messageLength);
-    if (digest[index] === byteA && digest[index + 1] === byteB) {
-      return {
-        token: `${salt}${i}`,
-        seconds: (performance.now() - startedAt) / 1000,
-      };
-    }
-  }
-
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +184,7 @@ async function solveAndStore(origin, html) {
   if (!challenge) {
     return false;
   }
-  const solution = solveChallenge(challenge);
+  const solution = await solveChallenge(challenge);
   if (!solution) {
     return false;
   }

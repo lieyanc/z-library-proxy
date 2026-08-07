@@ -18,7 +18,7 @@
 - `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径）。
 - `GET /__z/cover?u=<封面URL>` — 封面图代理，仅允许 `covers.z-lib.sk` / `covers.z-library.sk`。
 
-挑战求解平均需要约 6.5 万次 SHA-1（约 50–300 ms CPU），超出免费版 10 ms CPU 限额。[`wrangler.jsonc`](./wrangler.jsonc) 已将 `limits.cpu_ms` 设为 30000（需 Workers 付费版生效）；免费版上求解可能触发限额中断，此时挑战页会回退为透传给浏览器求解，功能不受影响。
+挑战求解平均需要约 6.5 万次 SHA-1。求解器使用 WebCrypto（`crypto.subtle` 不计入 Workers CPU 时间），在免费版 10 ms CPU 限额下也能工作；求解只在每个 isolate 建立会话时发生一次，且有 wall-clock 预算上限，失败时挑战页会回退为透传给浏览器求解，功能不受影响。
 
 ### 授权 IPFS 代理下载
 
