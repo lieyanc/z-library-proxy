@@ -31,8 +31,8 @@ remix_userid=<你的 userid>; remix_userkey=<你的 userkey>
 ```
 
 - 该值**只**在 `/__z/dl/` 解析请求中发送给源站，不会下发给访客，也不会用于搜索、详情等其他请求。
-- 生产环境请在 Cloudflare 控制台（Workers & Pages → 本 Worker → Settings → Variables and Secrets）添加为 **Secret**，或执行 `npx wrangler secret put ZLIB_ACCOUNT_COOKIES`。本地开发写入 [`.dev.vars`](./.gitignore)（已 gitignore）。
-- 不要把它提交进 `wrangler.jsonc` 或任何会被推送的文件——`remix_userkey` 等同于账户密码。
+- 生产环境请在 Cloudflare 控制台（Workers & Pages → 本 Worker → Settings → Variables and Secrets → Type 选 **Secret**）添加 `ZLIB_ACCOUNT_COOKIES`，或执行 `npx wrangler secret put ZLIB_ACCOUNT_COOKIES`。Secret 不会被后续 Git 部署覆盖。本地开发写入 [`.dev.vars`](./.gitignore)（已 gitignore）。
+- 不要把真实值提交进 `wrangler.jsonc` 或任何会被推送的文件——`remix_userkey` 等同于账户密码。仓库为私有且你确认可接受时，也可以选择直接写入 `wrangler.jsonc` 的 `vars`。
 - 未配置时，下载按钮回退为源站 `/dl/` 链接（访客自行登录源站）。
 
 ### 授权 IPFS 代理下载

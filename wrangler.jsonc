@@ -6,10 +6,6 @@
   "workers_dev": true,
   "vars": {
     "ALLOWED_IPFS_CIDS": "",
-    "UPSTREAM_ORIGIN": "https://z-lib.sk",
-    // 源站账户会话(仅用于 /dl/ 下载解析)。真实值请通过 Cloudflare 控制台
-    // 环境变量或 `npx wrangler secret put ZLIB_ACCOUNT_COOKIES` 配置,
-    // 本地开发写入 .dev.vars(已 gitignore),不要提交到仓库。
-    "ZLIB_ACCOUNT_COOKIES": ""
+    "UPSTREAM_ORIGIN": "https://z-lib.sk"
   }
 }
