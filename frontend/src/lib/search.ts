@@ -39,7 +39,21 @@ export interface ZlibBookDetail extends Book {
   properties: BookProperty[]
   ipfsCids: string[]
   downloadLabel: string
+  bookId?: string | null
   accountConfigured?: boolean
+}
+
+export interface ZlibFormat {
+  id: number | null
+  extension: string
+  filesize: string
+  downloadPath: string
+  lowQuality: boolean
+}
+
+export interface ZlibFormatsPayload {
+  bookId: string
+  formats: ZlibFormat[]
 }
 
 // Maps a /dl/<hash> source path to the worker-side account download relay.
@@ -169,6 +183,16 @@ export async function fetchZlibBook(
 ): Promise<ZlibBookDetail> {
   return fetchWithChallenge<ZlibBookDetail>(
     `/__z/api/zbook?path=${encodeURIComponent(bookPath)}`,
+    onVerifying,
+  )
+}
+
+export async function fetchZlibFormats(
+  bookId: string,
+  onVerifying?: (verifying: boolean) => void,
+): Promise<ZlibFormatsPayload> {
+  return fetchWithChallenge<ZlibFormatsPayload>(
+    `/__z/api/zformats?id=${encodeURIComponent(bookId)}`,
     onVerifying,
   )
 }

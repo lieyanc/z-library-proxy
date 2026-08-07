@@ -58,6 +58,61 @@ test("rejects invalid CIDs before probing a gateway", async () => {
   assert.deepEqual(await response.json(), { error: "Invalid CID" });
 });
 
+test("rejects invalid book ids for the formats API", async () => {
+  for (const id of ["", "abc", "1'.union", "1234567890123"]) {
+    const response = await worker.fetch(
+      new Request(`https://books.example.com/__z/api/zformats?id=${encodeURIComponent(id)}`),
+      { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+    );
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: "Invalid book id" });
+  }
+});
+
+test("serves sanitized other-format lists from the upstream JSON API", async (context) => {
+  const originalFetch = globalThis.fetch;
+  let forwardedUrl;
+  let forwardedCookie;
+
+  globalThis.fetch = async (url, init) => {
+    forwardedUrl = url;
+    forwardedCookie = new Headers(init?.headers).get("Cookie");
+    return new Response(
+      JSON.stringify({
+        success: 1,
+        books: [
+          { id: 116440498, extension: "azw3", filesizeString: "1.65 MB", href: "/dl/ZnwB2lbGAo" },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const response = await worker.fetch(
+    new Request("https://books.example.com/__z/api/zformats?id=11253983"),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk", ZLIB_ACCOUNT_COOKIES: "remix_userkey=abc" },
+  );
+
+  assert.equal(forwardedUrl, "https://z-lib.sk/papi/book/11253983/formats");
+  assert.equal(forwardedCookie, "remix_userkey=abc");
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    bookId: "11253983",
+    formats: [
+      {
+        id: 116440498,
+        extension: "azw3",
+        filesize: "1.65 MB",
+        downloadPath: "/dl/ZnwB2lbGAo",
+        lowQuality: false,
+      },
+    ],
+  });
+});
+
 test("rejects valid but unauthorized IPFS proxy downloads", async () => {
   const cid = "QmT5NvUtoM5nWFfrQdVrFtvGfKFmG7AHE8P34isapyhCxX";
   const response = await worker.fetch(

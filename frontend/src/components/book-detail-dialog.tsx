@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { BookOpenIcon, CopyIcon, DownloadIcon, GaugeIcon } from "lucide-react"
+import { BookOpenIcon, ChevronDownIcon, CopyIcon, DownloadIcon, GaugeIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -10,15 +10,35 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import type { Book, IpfsProbePayload, ZlibBookDetail } from "@/lib/search"
-import { fetchZlibBook, probeIpfsGateways, safeUrl, workerDownloadUrl } from "@/lib/search"
+import type { Book, IpfsProbePayload, ZlibBookDetail, ZlibFormat } from "@/lib/search"
+import {
+  fetchZlibBook,
+  fetchZlibFormats,
+  probeIpfsGateways,
+  safeUrl,
+  workerDownloadUrl,
+} from "@/lib/search"
 
 type DetailState =
   | { status: "loading" }
   | { status: "done"; detail: ZlibBookDetail }
+  | { status: "error" }
+
+type FormatsState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "done"; formats: ZlibFormat[] }
   | { status: "error" }
 
 function CoverImage({ cover, title }: { cover: string | null; title: string }) {
@@ -127,6 +147,7 @@ export function BookDetailDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const [state, setState] = useState<DetailState>({ status: "loading" })
+  const [formatsState, setFormatsState] = useState<FormatsState>({ status: "idle" })
 
   useEffect(() => {
     if (!open || !book?.bookPath) return
@@ -145,6 +166,26 @@ export function BookDetailDialog({
   }, [open, book?.bookPath])
 
   const detail = state.status === "done" ? state.detail : null
+  const detailBookId = detail?.bookId ?? null
+
+  useEffect(() => {
+    if (!open || !detailBookId) {
+      setFormatsState({ status: "idle" })
+      return
+    }
+    setFormatsState({ status: "loading" })
+    let cancelled = false
+    fetchZlibFormats(detailBookId)
+      .then((payload) => {
+        if (!cancelled) setFormatsState({ status: "done", formats: payload.formats })
+      })
+      .catch(() => {
+        if (!cancelled) setFormatsState({ status: "error" })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, detailBookId])
   const filename = detail
     ? `${detail.title}${detail.extension ? `.${detail.extension}` : ""}`
     : ""
@@ -194,26 +235,98 @@ export function BookDetailDialog({
                 </div>
                 {detail.downloadPath && (
                   <div>
-                    <Button
-                      size="sm"
-                      render={
-                        <a
-                          href={
-                            safeUrl(
-                              detail.accountConfigured
-                                ? workerDownloadUrl(detail.downloadPath)
-                                : detail.downloadPath,
-                            ) ?? "#"
-                          }
-                          {...(detail.accountConfigured
-                            ? {}
-                            : { target: "_blank", rel: "noopener noreferrer" })}
-                        />
-                      }
-                    >
-                      <DownloadIcon data-icon="inline-start" />
-                      下载{detail.downloadLabel ? `（${detail.downloadLabel}）` : ""}
-                    </Button>
+                    <div className="flex items-center">
+                      <Button
+                        size="sm"
+                        className={detailBookId ? "rounded-r-none" : undefined}
+                        render={
+                          <a
+                            href={
+                              safeUrl(
+                                detail.accountConfigured
+                                  ? workerDownloadUrl(detail.downloadPath)
+                                  : detail.downloadPath,
+                              ) ?? "#"
+                            }
+                            {...(detail.accountConfigured
+                              ? {}
+                              : { target: "_blank", rel: "noopener noreferrer" })}
+                          />
+                        }
+                      >
+                        <DownloadIcon data-icon="inline-start" />
+                        下载{detail.downloadLabel ? `（${detail.downloadLabel}）` : ""}
+                      </Button>
+                      {detailBookId && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button
+                                size="sm"
+                                className="rounded-l-none border-l border-primary-foreground/25 px-2"
+                                aria-label="其他格式"
+                                title="其他格式"
+                              />
+                            }
+                          >
+                            {formatsState.status === "loading" ? (
+                              <Spinner />
+                            ) : (
+                              <ChevronDownIcon />
+                            )}
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-auto min-w-44">
+                            <DropdownMenuGroup>
+                              <DropdownMenuLabel>其他格式</DropdownMenuLabel>
+                              {formatsState.status === "loading" && (
+                                <DropdownMenuItem disabled>加载中…</DropdownMenuItem>
+                              )}
+                              {formatsState.status === "error" && (
+                                <DropdownMenuItem disabled>
+                                  加载失败，请稍后重试
+                                </DropdownMenuItem>
+                              )}
+                              {formatsState.status === "done" &&
+                                formatsState.formats.length === 0 && (
+                                  <DropdownMenuItem disabled>没有其他格式</DropdownMenuItem>
+                                )}
+                              {formatsState.status === "done" &&
+                                formatsState.formats.map((format) => (
+                                  <DropdownMenuItem
+                                    key={format.downloadPath}
+                                    render={
+                                      <a
+                                        href={
+                                          safeUrl(
+                                            detail.accountConfigured
+                                              ? workerDownloadUrl(format.downloadPath)
+                                              : format.downloadPath,
+                                          ) ?? "#"
+                                        }
+                                        {...(detail.accountConfigured
+                                          ? {}
+                                          : { target: "_blank", rel: "noopener noreferrer" })}
+                                      />
+                                    }
+                                  >
+                                    <span className="font-medium">
+                                      {format.extension.toUpperCase()}
+                                    </span>
+                                    {format.filesize && (
+                                      <span className="text-xs text-muted-foreground">
+                                        {format.filesize}
+                                      </span>
+                                    )}
+                                    {format.lowQuality && (
+                                      <span className="text-xs text-destructive">质量不佳</span>
+                                    )}
+                                  </DropdownMenuItem>
+                                ))}
+                            </DropdownMenuGroup>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </div>
                     <p className="mt-1.5 text-xs text-muted-foreground">
                       {detail.accountConfigured
                         ? "经 Worker 使用已配置账户解析并中转下载"
