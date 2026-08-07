@@ -477,20 +477,22 @@ async function searchZlibCatalog(query, page, env) {
   const normalizedQuery = query.trim().slice(0, 200);
   let results = [];
   let ok = false;
+  let error = null;
   try {
     const pageSuffix = page > 1 ? `?page=${page}` : "";
     const html = await fetchZlibPage(`/s/${encodeURIComponent(normalizedQuery)}${pageSuffix}`, env);
     results = parseZlibSearch(html);
     ok = true;
-  } catch (error) {
-    console.error("Z-Library search failed", error);
+  } catch (caught) {
+    error = String(caught);
+    console.error("Z-Library search failed", caught);
   }
 
   return {
     query: normalizedQuery,
     page,
     results,
-    sources: { zlib: { ok, count: results.length } },
+    sources: { zlib: { ok, count: results.length, error } },
   };
 }
 

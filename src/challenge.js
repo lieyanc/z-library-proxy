@@ -266,7 +266,8 @@ export async function fetchUpstream(url, init, { origin, fetchImpl = fetch } = {
     if (
       response.status === 503 &&
       text.includes(CHALLENGE_TITLE) &&
-      solves < MAX_SOLVES_PER_REQUEST
+      solves < MAX_SOLVES_PER_REQUEST &&
+      attempt + 1 < MAX_ATTEMPTS
     ) {
       solves += 1;
       const solved = await solveWithLock(sessionOrigin, text);
