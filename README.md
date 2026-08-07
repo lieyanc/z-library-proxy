@@ -72,6 +72,8 @@ Worker 只连接代码中固定的三个 IPFS 网关，不接受自定义上游�
 | Non-production branch deploy command | `npx wrangler versions upload`（默认值） |
 | Root directory | `/`（默认值） |
 
+仓库不会在 lockfile 中固定 npm registry。本机可通过 `npm config set registry https://registry.npmmirror.com/ --location=user` 使用 npmmirror；Cloudflare Workers Builds 默认使用 npm 官方源，也可在 **Settings > Build > Build Variables and Secrets** 中显式设置 `NPM_CONFIG_REGISTRY=https://registry.npmjs.org/`。
+
 部署成功后，每次向 `master` 推送提交都会自动发布；其他分支可生成预览版本。Worker 名称必须与 [`wrangler.jsonc`](./wrangler.jsonc) 中的 `name` 完全一致。
 
 如需绑定自己的域名，在该 Worker 的 **Settings > Domains & Routes** 中添加 Custom Domain。源站地址位于 [`wrangler.jsonc`](./wrangler.jsonc) 的 `UPSTREAM_ORIGIN`，修改后提交到 Git 即会随下一次构建部署；该值必须是没有路径、查询参数和片段的 HTTPS Origin。
