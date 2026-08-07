@@ -14,7 +14,7 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import type { Book, IpfsProbePayload, ZlibBookDetail } from "@/lib/search"
-import { fetchZlibBook, probeIpfsGateways, safeUrl } from "@/lib/search"
+import { fetchZlibBook, probeIpfsGateways, safeUrl, workerDownloadUrl } from "@/lib/search"
 
 type DetailState =
   | { status: "loading" }
@@ -200,9 +200,16 @@ export function BookDetailDialog({
                       size="sm"
                       render={
                         <a
-                          href={safeUrl(detail.downloadPath) ?? "#"}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                          href={
+                            safeUrl(
+                              detail.accountConfigured
+                                ? workerDownloadUrl(detail.downloadPath)
+                                : detail.downloadPath,
+                            ) ?? "#"
+                          }
+                          {...(detail.accountConfigured
+                            ? {}
+                            : { target: "_blank", rel: "noopener noreferrer" })}
                         />
                       }
                     >
@@ -210,7 +217,9 @@ export function BookDetailDialog({
                       下载{detail.downloadLabel ? `（${detail.downloadLabel}）` : ""}
                     </Button>
                     <p className="mt-1.5 text-xs text-muted-foreground">
-                      下载由源站处理，未登录时会跳转源站登录页
+                      {detail.accountConfigured
+                        ? "经 Worker 使用已配置账户解析并中转下载"
+                        : "下载由源站处理，未登录时会跳转源站登录页"}
                     </p>
                   </div>
                 )}

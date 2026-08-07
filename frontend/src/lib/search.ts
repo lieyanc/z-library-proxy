@@ -39,6 +39,14 @@ export interface ZlibBookDetail extends Book {
   properties: BookProperty[]
   ipfsCids: string[]
   downloadLabel: string
+  accountConfigured?: boolean
+}
+
+// Maps a /dl/<hash> source path to the worker-side account download relay.
+export function workerDownloadUrl(downloadPath: string | null | undefined): string | null {
+  if (!downloadPath) return null
+  const match = downloadPath.match(/^\/dl\/([A-Za-z0-9]+)$/)
+  return match ? `/__z/dl/${match[1]}` : null
 }
 
 export interface CatalogSource {

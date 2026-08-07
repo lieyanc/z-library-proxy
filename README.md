@@ -15,11 +15,25 @@
 ### 授权书库 API
 
 - `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。源站挑战时返回 `503 + {challenge}`。
-- `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径）。挑战时同样返回 `503 + {challenge}`。
+- `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径、是否已配置下载账户）。挑战时同样返回 `503 + {challenge}`。
 - `POST /__z/api/challenge` — 提交浏览器求解的 `{token, seconds}`，存入上游会话 jar。
 - `GET /__z/cover?u=<封面URL>` — 封面图代理，仅允许 `covers.z-lib.sk` / `covers.z-library.sk`。
+- `GET /__z/dl/<hash>` — 账户下载中转：用已配置的账户会话解析 `/dl/<hash>` 的 302 签名 CDN 地址并流式回传文件（支持断点续传式开放 Range），未配置账户时返回 501。
 
 PoW 求解（平均约 6.5 万次 SHA-1）默认在浏览器本地完成，Worker 零 CPU 负担，免费版即可运行；Worker 内置的 WebCrypto 兜底求解器（`crypto.subtle` 不计入 CPU 时间）只服务直接访问代理页面的场景。
+
+### 源站账户会话（下载用）
+
+详情弹窗的“下载”按钮需要源站账户才能解析真实文件地址。把账户会话 Cookie 配置为环境变量 `ZLIB_ACCOUNT_COOKIES`：
+
+```text
+remix_userid=<你的 userid>; remix_userkey=<你的 userkey>
+```
+
+- 该值**只**在 `/__z/dl/` 解析请求中发送给源站，不会下发给访客，也不会用于搜索、详情等其他请求。
+- 生产环境请在 Cloudflare 控制台（Workers & Pages → 本 Worker → Settings → Variables and Secrets）添加为 **Secret**，或执行 `npx wrangler secret put ZLIB_ACCOUNT_COOKIES`。本地开发写入 [`.dev.vars`](./.gitignore)（已 gitignore）。
+- 不要把它提交进 `wrangler.jsonc` 或任何会被推送的文件——`remix_userkey` 等同于账户密码。
+- 未配置时，下载按钮回退为源站 `/dl/` 链接（访客自行登录源站）。
 
 ### 授权 IPFS 代理下载
 

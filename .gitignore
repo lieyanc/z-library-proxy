@@ -1,3 +1,4 @@
 node_modules/
 .wrangler/
 src/assets.generated.js
+.dev.vars

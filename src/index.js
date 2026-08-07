@@ -430,13 +430,20 @@ async function handleInternalRequest(request, requestUrl, env) {
     if (!book) {
       return jsonResponse({ error: "Book page could not be parsed" }, { status: 502 });
     }
-    return jsonResponse(book, {
-      headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=900" },
-    });
+    return jsonResponse(
+      { ...book, accountConfigured: Boolean((env.ZLIB_ACCOUNT_COOKIES || "").trim()) },
+      {
+        headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=900" },
+      },
+    );
   }
 
   if (requestUrl.pathname === "/__z/cover") {
     return proxyCoverImage(request, requestUrl, env);
+  }
+
+  if (requestUrl.pathname.startsWith("/__z/dl/")) {
+    return handleAccountDownload(request, requestUrl, env);
   }
 
   if (requestUrl.pathname === "/__z/api/ipfs-probe") {
@@ -571,6 +578,114 @@ async function fetchZlibBook(bookPath, env) {
     console.error("Z-Library book fetch failed", error);
     return null;
   }
+}
+
+// Resolves /dl/<hash> with the configured account session (used only here)
+// and streams the CDN file through the worker. The upstream answers 302 to a
+// signed CDN URL; we follow it manually and proxy the bytes so visitors never
+// contact third-party hosts directly.
+async function handleAccountDownload(request, requestUrl, env) {
+  const hash = requestUrl.pathname.slice("/__z/dl/".length);
+  if (!/^[A-Za-z0-9]+$/.test(hash)) {
+    return new Response("Invalid download path", { status: 400 });
+  }
+
+  const accountCookies = (env.ZLIB_ACCOUNT_COOKIES || "").trim();
+  if (!accountCookies) {
+    return new Response("Account session is not configured", { status: 501 });
+  }
+
+  let upstream;
+  try {
+    upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
+  } catch (error) {
+    console.error(error);
+    return new Response("Worker configuration error", { status: 500 });
+  }
+
+  let dlResponse;
+  try {
+    dlResponse = await fetchUpstream(`${upstream.origin}/dl/${hash}`, {
+      method: "GET",
+      headers: { ...ZLIB_FETCH_HEADERS, Cookie: accountCookies },
+      redirect: "manual",
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (error) {
+    console.error("Download resolution failed", error);
+    return new Response("Bad Gateway", { status: 502 });
+  }
+
+  if (dlResponse.status === 200) {
+    return new Response("源站账户未登录或当日下载额度已用尽", {
+      status: 403,
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
+  const location = dlResponse.headers.get("Location");
+  if (dlResponse.status !== 302 || !location) {
+    return new Response("Bad Gateway", { status: 502 });
+  }
+
+  const cdnHeaders = { "User-Agent": ZLIB_FETCH_HEADERS["User-Agent"] };
+  const range = request.headers.get("Range");
+  if (range && request.method === "GET") {
+    cdnHeaders.Range = range;
+  }
+
+  const fetchCdn = (headers) =>
+    fetch(location, { method: request.method, headers, redirect: "manual" });
+
+  let cdnResponse;
+  try {
+    cdnResponse = await fetchCdn(cdnHeaders);
+    if (cdnResponse.status === 416 && cdnHeaders.Range) {
+      // The CDN only supports open-ended ranges; retry as a plain full GET.
+      await cdnResponse.body?.cancel().catch(() => {});
+      delete cdnHeaders.Range;
+      cdnResponse = await fetchCdn(cdnHeaders);
+    }
+  } catch (error) {
+    console.error("CDN fetch failed", error);
+    return new Response("Bad Gateway", { status: 502 });
+  }
+  if (!cdnResponse.ok) {
+    return new Response("Bad Gateway", { status: 502 });
+  }
+
+  let filename = "";
+  try {
+    filename = new URL(location).searchParams.get("filename") || "";
+  } catch {
+    // Keep the CDN Content-Disposition as the fallback below.
+  }
+
+  const headers = new Headers();
+  headers.set(
+    "Content-Type",
+    cdnResponse.headers.get("Content-Type") || "application/octet-stream",
+  );
+  for (const name of ["Content-Length", "Accept-Ranges", "Content-Range"]) {
+    const value = cdnResponse.headers.get(name);
+    if (value) {
+      headers.set(name, value);
+    }
+  }
+  if (filename) {
+    headers.set(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
+  } else if (cdnResponse.headers.get("Content-Disposition")) {
+    headers.set("Content-Disposition", cdnResponse.headers.get("Content-Disposition"));
+  }
+  headers.set("Cache-Control", "private, no-store");
+
+  return new Response(request.method === "HEAD" ? null : cdnResponse.body, {
+    status: cdnResponse.status,
+    headers,
+  });
 }
 
 async function proxyCoverImage(request, requestUrl, env) {

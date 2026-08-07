@@ -188,3 +188,62 @@ test("rejects malformed challenge submissions", async () => {
   );
   assert.equal(badMethod.status, 405);
 });
+
+test("account download requires configuration", async () => {
+  const response = await worker.fetch(
+    new Request("https://books.example.com/__z/dl/AbC123"),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk", ZLIB_ACCOUNT_COOKIES: "" },
+  );
+  assert.equal(response.status, 501);
+});
+
+test("account download resolves /dl/ with account cookies and relays the CDN file", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    const rawHeaders = init?.headers;
+    const cookie = rawHeaders?.get
+      ? rawHeaders.get("Cookie")
+      : rawHeaders?.Cookie || rawHeaders?.cookie || null;
+    calls.push({ url: String(url), cookie });
+    if (String(url).includes("/dl/")) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location:
+            "https://dln1.ncdn.ec/books-files/x/redirection?filename=My%20Book%20%E4%B8%AD%E6%96%87.epub",
+        },
+      });
+    }
+    return new Response("EPUB-BYTES", {
+      status: 200,
+      headers: {
+        "Content-Type": "application/epub+zip",
+        "Content-Length": "10",
+        "Accept-Ranges": "bytes",
+      },
+    });
+  };
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const response = await worker.fetch(
+    new Request("https://books.example.com/__z/dl/AbC123"),
+    {
+      UPSTREAM_ORIGIN: "https://z-lib.sk",
+      ZLIB_ACCOUNT_COOKIES: "remix_userid=1; remix_userkey=secret",
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "EPUB-BYTES");
+  assert.equal(response.headers.get("Content-Type"), "application/epub+zip");
+  assert.match(
+    response.headers.get("Content-Disposition") || "",
+    /filename\*=UTF-8''My%20Book%20%E4%B8%AD%E6%96%87.epub/,
+  );
+  // 账户 cookie 只出现在 /dl/ 解析请求里,CDN 请求不带任何 cookie
+  assert.match(calls[0].cookie, /remix_userkey=secret/);
+  assert.equal(calls[1].cookie, null);
+});
