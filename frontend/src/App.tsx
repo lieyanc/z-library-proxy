@@ -3,9 +3,19 @@ import { BookOpenIcon, SearchIcon, SearchXIcon } from "lucide-react"
 
 import { BookCard } from "@/components/book-card"
 import { BookDetailDialog } from "@/components/book-detail-dialog"
+import { GithubIcon } from "@/components/github-icon"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Empty,
   EmptyDescription,
@@ -29,7 +39,7 @@ import type {
   SearchPayload,
   ZlibSearchPayload,
 } from "@/lib/search"
-import { searchBooks, searchZlib } from "@/lib/search"
+import { searchBooks, searchZlib, sourceSearchUrl } from "@/lib/search"
 
 type Mode = "open" | "source"
 
@@ -96,13 +106,22 @@ function EmptyState({
   )
 }
 
-export default function App({ initialQuery }: { initialQuery: string }) {
-  const [mode, setMode] = useState<Mode>("open")
+const GITHUB_REPO_URL = "https://github.com/lieyanc/z-library-proxy"
+
+export default function App({
+  initialQuery,
+  upstreamHost,
+}: {
+  initialQuery: string
+  upstreamHost: string
+}) {
+  const [mode, setMode] = useState<Mode>("source")
   const [query, setQuery] = useState(initialQuery)
   const [state, setState] = useState<SearchState>({ status: "idle" })
   const [verifying, setVerifying] = useState(false)
   const [selectedBook, setSelectedBook] = useState<Book | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [sourceRenderOpen, setSourceRenderOpen] = useState(false)
 
   const runSearch = useCallback(async (value: string, searchMode: Mode) => {
     const trimmed = value.trim()
@@ -135,7 +154,7 @@ export default function App({ initialQuery }: { initialQuery: string }) {
 
   useEffect(() => {
     if (initialQuery.trim()) {
-      void runSearch(initialQuery, "open")
+      void runSearch(initialQuery, "source")
     }
   }, [initialQuery, runSearch])
 
@@ -151,12 +170,25 @@ export default function App({ initialQuery }: { initialQuery: string }) {
     <div className="flex min-h-svh flex-col">
       <header className="border-b">
         <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between px-4">
-          <a href="/" className="text-lg font-bold tracking-tight">
-            书库
+          <a
+            href={GITHUB_REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-lg font-bold tracking-tight"
+          >
+            <GithubIcon className="size-5" />
+            lieyanc/z-library-proxy
           </a>
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              render={<a href="/" aria-label="搜索主页" title="搜索主页" />}
+            >
+              <SearchIcon />
+            </Button>
             <Button variant="ghost" render={<a href="/login" />}>
-              源站账户
+              {upstreamHost ? `${upstreamHost}账户` : "源站账户"}
             </Button>
             <ThemeToggle />
           </div>
@@ -211,23 +243,36 @@ export default function App({ initialQuery }: { initialQuery: string }) {
             variant="outline"
             value={[mode]}
             onValueChange={(values) => {
+              // Clicking the already-active item reports an empty value;
+              // only switching to the other mode may trigger a new search.
               if (values.includes("source")) {
-                switchMode("source")
+                if (mode !== "source") switchMode("source")
               } else if (values.includes("open")) {
-                switchMode("open")
+                if (mode !== "open") switchMode("open")
               }
             }}
             aria-label="搜索范围"
           >
+            <ToggleGroupItem
+              value="source"
+              onClick={() => {
+                // A second click on the active Z-Library toggle offers the
+                // original source-site rendering instead of re-searching.
+                if (mode === "source" && query.trim()) {
+                  setSourceRenderOpen(true)
+                }
+              }}
+            >
+              Z-Library
+            </ToggleGroupItem>
             <ToggleGroupItem value="open">开放资源</ToggleGroupItem>
-            <ToggleGroupItem value="source">授权书库</ToggleGroupItem>
           </ToggleGroup>
         </section>
         {state.status !== "idle" && (
           <section aria-live="polite" className="flex flex-col gap-4">
             <div className="flex items-baseline justify-between gap-4">
               <h2 className="text-lg font-semibold">
-                {state.mode === "source" ? "授权书库" : "开放资源"}
+                {state.mode === "source" ? "Z-Library" : "开放资源"}
               </h2>
               <p className="text-sm text-muted-foreground">{statusText(state, verifying)}</p>
             </div>
@@ -275,7 +320,7 @@ export default function App({ initialQuery }: { initialQuery: string }) {
               ) : (
                 <EmptyState
                   icon={BookOpenIcon}
-                  title={state.mode === "source" ? "授权书库没有匹配结果" : "没有找到可公开阅读的结果"}
+                  title={state.mode === "source" ? "Z-Library 没有匹配结果" : "没有找到可公开阅读的结果"}
                   description="换个关键词试试"
                 />
               ))}
@@ -285,7 +330,7 @@ export default function App({ initialQuery }: { initialQuery: string }) {
                 title="搜索暂不可用"
                 description={
                   state.mode === "source"
-                    ? "授权书库服务暂时不可用，请稍后再试"
+                    ? "Z-Library 服务暂时不可用，请稍后再试"
                     : "开放资源服务暂时不可用，请稍后再试"
                 }
               />
@@ -298,6 +343,28 @@ export default function App({ initialQuery }: { initialQuery: string }) {
         open={detailOpen}
         onOpenChange={setDetailOpen}
       />
+      <Dialog open={sourceRenderOpen} onOpenChange={setSourceRenderOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>使用原始样式渲染？</DialogTitle>
+            <DialogDescription>
+              将跳转到 Z-Library 源站搜索页，以原始页面样式展示“{query.trim()}”的结果。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              取消
+            </DialogClose>
+            <Button
+              onClick={() => {
+                window.location.href = sourceSearchUrl(query)
+              }}
+            >
+              跳转源站
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

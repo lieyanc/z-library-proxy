@@ -230,9 +230,10 @@ class PatchHeadHandler {
 }
 
 class PatchBodyHandler {
-  constructor(searchPage, query) {
+  constructor(searchPage, query, upstreamHost) {
     this.searchPage = searchPage;
     this.query = query;
+    this.upstreamHost = upstreamHost;
   }
 
   element(element) {
@@ -241,7 +242,7 @@ class PatchBodyHandler {
     element.setAttribute("class", `${currentClasses} ${patchClasses}`.trim());
 
     if (this.searchPage) {
-      element.prepend(renderSourceToolbar(this.query), { html: true });
+      element.prepend(renderSourceToolbar(this.query, this.upstreamHost), { html: true });
     }
   }
 }
@@ -280,7 +281,7 @@ function rewriteHtml(response, upstream, requestUrl) {
     .on("meta[content]", new OriginReferenceRewriter("content", upstream, requestUrl))
     .on("*[style]", new OriginReferenceRewriter("style", upstream, requestUrl))
     .on("head", new PatchHeadHandler())
-    .on("body", new PatchBodyHandler(searchDetails.isSearchPage, searchDetails.query));
+    .on("body", new PatchBodyHandler(searchDetails.isSearchPage, searchDetails.query, upstream.host));
 
   return rewriter.transform(response);
 }
@@ -727,13 +728,21 @@ async function proxyCoverImage(request, requestUrl, env) {
   });
 }
 
-function handleHomeRequest(request, requestUrl) {
+function upstreamHostOrDefault(env) {
+  try {
+    return parseUpstreamOrigin(env.UPSTREAM_ORIGIN).host;
+  } catch {
+    return new URL(DEFAULT_UPSTREAM_ORIGIN).host;
+  }
+}
+
+function handleHomeRequest(request, requestUrl, env) {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return null;
   }
 
   const query = requestUrl.searchParams.get("q") || "";
-  const body = request.method === "HEAD" ? null : renderHomePage(query);
+  const body = request.method === "HEAD" ? null : renderHomePage(query, upstreamHostOrDefault(env));
   return new Response(body, {
     headers: {
       "Cache-Control": "no-store",
@@ -802,7 +811,7 @@ export default {
     }
 
     if (requestUrl.pathname === "/") {
-      const homeResponse = handleHomeRequest(request, requestUrl);
+      const homeResponse = handleHomeRequest(request, requestUrl, env);
       if (homeResponse) {
         return homeResponse;
       }

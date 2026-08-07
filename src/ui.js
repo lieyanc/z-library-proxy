@@ -21,8 +21,9 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-export function renderHomePage(query = "") {
+export function renderHomePage(query = "", upstreamHost = "") {
   const safeQuery = escapeHtml(query.slice(0, 200));
+  const safeUpstreamHost = escapeHtml(upstreamHost);
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -35,7 +36,7 @@ export function renderHomePage(query = "") {
   <script>${THEME_INIT_SCRIPT}</script>
 </head>
 <body>
-  <div id="root" data-query="${safeQuery}"></div>
+  <div id="root" data-query="${safeQuery}" data-upstream="${safeUpstreamHost}"></div>
   <script type="module" src="/__z/assets/app.js?v=${ASSETS_VERSION}"></script>
 </body>
 </html>`;
@@ -44,7 +45,11 @@ export function renderHomePage(query = "") {
 export const PATCH_CSS = String.raw`
 .zp-toolbar { position: sticky; top: 0; z-index: 2147483000; min-height: 56px; display: grid; grid-template-columns: auto minmax(180px, 620px) auto; align-items: center; gap: 18px; padding: 8px max(16px, calc((100vw - 1040px) / 2)); background: #ffffff; border-bottom: 1px solid #dce2dd; color: #202522; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
 .zp-toolbar a { color: #26302a; text-decoration: none; }
-.zp-toolbar .zp-brand { font-size: 17px; font-weight: 750; }
+.zp-toolbar .zp-brand { display: inline-flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 750; }
+.zp-toolbar .zp-brand svg { width: 18px; height: 18px; flex: none; fill: currentColor; }
+.zp-toolbar .zp-tools { display: flex; align-items: center; gap: 14px; }
+.zp-toolbar .zp-home { display: inline-flex; align-items: center; color: #26302a; }
+.zp-toolbar .zp-home svg { width: 18px; height: 18px; }
 .zp-toolbar .zp-account { font-size: 13px; color: #56615a; }
 .zp-search-form { height: 38px; display: grid; grid-template-columns: 1fr auto; overflow: hidden; border: 1px solid #aeb8b1; border-radius: 7px; background: #ffffff; }
 .zp-search-form:focus-within { border-color: #176b42; box-shadow: 0 0 0 3px rgba(23, 107, 66, 0.12); }
@@ -75,6 +80,7 @@ body.zp-search-page img { max-width: 100%; }
 
 @media (max-width: 680px) {
   .zp-toolbar { grid-template-columns: auto 1fr; gap: 10px; padding: 8px 12px; }
+  .zp-toolbar .zp-brand span { display: none; }
   .zp-toolbar .zp-account { display: none; }
   .zp-search-form button { min-width: 58px; }
   .zp-gateway-row { grid-template-columns: minmax(0, 1fr) auto; }
@@ -225,13 +231,24 @@ export const PATCH_JS = String.raw`
 })();
 `;
 
-export function renderSourceToolbar(query) {
+const GITHUB_REPO_URL = "https://github.com/lieyanc/z-library-proxy";
+
+const GITHUB_ICON_SVG =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>';
+
+const SEARCH_ICON_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+
+export function renderSourceToolbar(query, upstreamHost) {
   return `<header class="zp-toolbar">
-  <a class="zp-brand" href="/">书库</a>
+  <a class="zp-brand" href="${GITHUB_REPO_URL}" target="_blank" rel="noopener noreferrer">${GITHUB_ICON_SVG}<span>lieyanc/z-library-proxy</span></a>
   <form class="zp-search-form" data-zp-source-search role="search">
-    <input value="${escapeHtml(query.slice(0, 200))}" maxlength="200" aria-label="搜索授权书库" placeholder="书名、作者或 ISBN" required>
+    <input value="${escapeHtml(query.slice(0, 200))}" maxlength="200" aria-label="搜索 Z-Library" placeholder="书名、作者或 ISBN" required>
     <button type="submit">搜索</button>
   </form>
-  <a class="zp-account" href="/login">源站账户</a>
+  <div class="zp-tools">
+    <a class="zp-home" href="/" aria-label="搜索主页" title="搜索主页">${SEARCH_ICON_SVG}</a>
+    <a class="zp-account" href="/login">${escapeHtml(upstreamHost)}账户</a>
+  </div>
 </header>`;
 }

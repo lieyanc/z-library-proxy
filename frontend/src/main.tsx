@@ -8,6 +8,9 @@ const root = document.getElementById("root")!
 
 createRoot(root).render(
   <StrictMode>
-    <App initialQuery={root.dataset.query ?? ""} />
+    <App
+      initialQuery={root.dataset.query ?? ""}
+      upstreamHost={root.dataset.upstream ?? ""}
+    />
   </StrictMode>,
 )

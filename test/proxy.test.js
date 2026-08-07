@@ -25,7 +25,7 @@ test("serves the minimal search home without contacting the upstream", async () 
 
   assert.equal(response.status, 200);
   assert.match(response.headers.get("Content-Security-Policy"), /script-src 'self'/);
-  assert.match(html, /<div id="root" data-query="alice"><\/div>/);
+  assert.match(html, /<div id="root" data-query="alice" data-upstream="z-lib\.sk"><\/div>/);
   assert.match(html, /\/__z\/assets\/app\.js/);
   assert.match(html, /\/__z\/assets\/app\.css/);
 });
