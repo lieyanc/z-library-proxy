@@ -153,6 +153,12 @@ export function parseZlibBook(html, bookPath) {
   const downloadPath = downloadMatch ? downloadMatch[1] : null;
   const downloadLabel = downloadMatch ? stripTags(downloadMatch[2]) : "";
 
+  // Numeric book id, used by the /papi/book/<id>/formats endpoint. Present in
+  // the inline `new Book({"id":…})` bootstrap and on the download button.
+  const bookIdMatch =
+    html.match(/new Book\(\{"id":(\d{1,12})/) || html.match(/data-book_id="(\d{1,12})"/);
+  const bookId = bookIdMatch ? bookIdMatch[1] : null;
+
   const description = stripTags(
     firstMatch(html, /<div[^>]*id="bookDescription"[^>]*>([\s\S]*?)<\/div>/i) ||
       firstMatch(html, /<div[^>]*class="book-description"[^>]*>([\s\S]*?)<\/div>/i) ||
@@ -180,6 +186,41 @@ export function parseZlibBook(html, bookPath) {
     ipfsCids,
     downloadPath,
     downloadLabel,
+    bookId,
     bookPath,
   };
+}
+
+// Sanitizes the JSON payload of GET /papi/book/<id>/formats into the shape the
+// frontend renders as "other format" download options.
+const FORMAT_DL_PATH_RE = /^\/dl\/[A-Za-z0-9]+$/;
+const FORMAT_EXTENSION_RE = /^[a-z0-9]{1,10}$/i;
+
+export function parseZlibFormats(payload) {
+  let data;
+  try {
+    data = JSON.parse(payload);
+  } catch {
+    return [];
+  }
+  if (!data || !Array.isArray(data.books)) {
+    return [];
+  }
+
+  const formats = [];
+  for (const book of data.books) {
+    const extension = String(book?.extension || "").toLowerCase();
+    const downloadPath = String(book?.href || "");
+    if (!FORMAT_EXTENSION_RE.test(extension) || !FORMAT_DL_PATH_RE.test(downloadPath)) {
+      continue;
+    }
+    formats.push({
+      id: Number.isSafeInteger(book?.id) ? book.id : null,
+      extension,
+      filesize: typeof book?.filesizeString === "string" ? book.filesizeString : "",
+      downloadPath,
+      lowQuality: book?.isLowQuality === true || book?.isLowQuality === 1,
+    });
+  }
+  return formats;
 }

@@ -1,6 +1,6 @@
 import { searchOpenCatalogs } from "./catalog.js";
 import { ChallengeRequiredError, fetchUpstream, storeSessionCookies } from "./challenge.js";
-import { COVER_HOSTS, parseZlibBook, parseZlibSearch } from "./zlib.js";
+import { COVER_HOSTS, parseZlibBook, parseZlibFormats, parseZlibSearch } from "./zlib.js";
 import {
   isCidAllowed,
   isValidCid,
@@ -439,6 +439,27 @@ async function handleInternalRequest(request, requestUrl, env) {
     );
   }
 
+  if (requestUrl.pathname === "/__z/api/zformats") {
+    const bookId = requestUrl.searchParams.get("id") || "";
+    if (!/^\d{1,12}$/.test(bookId)) {
+      return jsonResponse({ error: "Invalid book id" }, { status: 400 });
+    }
+
+    const result = await fetchZlibFormats(bookId, env);
+    if (result?.challenge) {
+      return jsonResponse(result, {
+        status: 503,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+    if (!result) {
+      return jsonResponse({ error: "Formats could not be fetched" }, { status: 502 });
+    }
+    return jsonResponse(result, {
+      headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=900" },
+    });
+  }
+
   if (requestUrl.pathname === "/__z/cover") {
     return proxyCoverImage(request, requestUrl, env);
   }
@@ -577,6 +598,41 @@ async function fetchZlibBook(bookPath, env) {
       return { challenge: error.challenge };
     }
     console.error("Z-Library book fetch failed", error);
+    return null;
+  }
+}
+
+// Lists the other downloadable formats of a book via the upstream JSON
+// endpoint /papi/book/<id>/formats (the "Download" dropdown on book pages).
+// The listing itself does not require an account session; downloads still go
+// through /__z/dl/, which does.
+async function fetchZlibFormats(bookId, env) {
+  try {
+    const upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
+    const accountCookies = (env.ZLIB_ACCOUNT_COOKIES || "").trim();
+    const response = await fetchUpstream(
+      `${upstream.origin}/papi/book/${bookId}/formats`,
+      {
+        headers: {
+          ...ZLIB_FETCH_HEADERS,
+          Accept: "application/json, */*;q=0.8",
+          Referer: `${upstream.origin}/book/`,
+          ...(accountCookies ? { Cookie: accountCookies } : {}),
+        },
+        redirect: "manual",
+        signal: AbortSignal.timeout(20000),
+      },
+      { delegateChallenge: true },
+    );
+    if (!response.ok) {
+      throw new Error(`Upstream formats returned ${response.status}`);
+    }
+    return { bookId, formats: parseZlibFormats(await response.text()) };
+  } catch (error) {
+    if (error instanceof ChallengeRequiredError) {
+      return { challenge: error.challenge };
+    }
+    console.error("Z-Library formats fetch failed", error);
     return null;
   }
 }

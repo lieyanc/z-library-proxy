@@ -15,7 +15,8 @@
 ### 授权书库 API
 
 - `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。源站挑战时返回 `503 + {challenge}`。
-- `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径、是否已配置下载账户）。挑战时同样返回 `503 + {challenge}`。
+- `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径、数字书籍 ID、是否已配置下载账户）。挑战时同样返回 `503 + {challenge}`。
+- `GET /__z/api/zformats?id=<数字书籍ID>` — 同一本书的其他可选格式（转发上游 `/papi/book/<id>/formats`），每项含扩展名、文件大小和 `/dl/<hash>` 下载路径，下载仍走 `/__z/dl/` 中转。挑战时同样返回 `503 + {challenge}`。
 - `POST /__z/api/challenge` — 提交浏览器求解的 `{token, seconds}`，存入上游会话 jar。
 - `GET /__z/cover?u=<封面URL>` — 封面图代理，仅允许 `covers.z-lib.sk` / `covers.z-library.sk`。
 - `GET /__z/dl/<hash>` — 账户下载中转：用已配置的账户会话解析 `/dl/<hash>` 的 302 签名 CDN 地址并流式回传文件（支持断点续传式开放 Range），未配置账户时返回 501。

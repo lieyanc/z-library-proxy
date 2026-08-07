@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseZlibBook, parseZlibSearch, proxyCoverUrl } from "../src/zlib.js";
+import { parseZlibBook, parseZlibFormats, parseZlibSearch, proxyCoverUrl } from "../src/zlib.js";
 
 // Trimmed copies of the real z-lib.sk markup (2026-08).
 const SEARCH_HTML = `
@@ -100,6 +100,7 @@ test("parses a book detail page", () => {
   assert.match(book.cover, /^\/__z\/cover\?u=/);
   assert.equal(book.downloadPath, "/dl/ZnwYyVDOmo");
   assert.equal(book.downloadLabel, "epub, 430.04 MB");
+  assert.equal(book.bookId, "5833054");
   assert.deepEqual(book.ipfsCids, [
     "QmT2Vp9S4bsRqcBRcoAe8Zcpb6tihfj89Ut55NtCcHFf8A",
     "bafykbzacecqi7keyyaaqujuz6652w6mr7fxibtkocporp5rvpsizgzlrn3qvm",
@@ -112,4 +113,40 @@ test("parses a book detail page", () => {
 
 test("returns null for a page without a book title", () => {
   assert.equal(parseZlibBook("<html><body>not found</body></html>", "/book/x/y.html"), null);
+});
+
+test("parses the other-formats payload", () => {
+  // Trimmed copy of the real /papi/book/<id>/formats response (2026-08).
+  const payload = JSON.stringify({
+    success: 1,
+    books: [
+      { id: 116440498, extension: "azw3", filesizeString: "1.65 MB", href: "/dl/ZnwB2lbGAo" },
+      { id: 119791987, extension: "EPUB", filesizeString: "3.64 MB", href: "/dl/1mx08wvymd", isLowQuality: 1 },
+      { id: 1, extension: "pdf", filesizeString: "7.53 MB", href: "https://evil.example.com/x" },
+      { id: 2, extension: "<script>", filesizeString: "1 MB", href: "/dl/abcd1234" },
+    ],
+  });
+
+  assert.deepEqual(parseZlibFormats(payload), [
+    {
+      id: 116440498,
+      extension: "azw3",
+      filesize: "1.65 MB",
+      downloadPath: "/dl/ZnwB2lbGAo",
+      lowQuality: false,
+    },
+    {
+      id: 119791987,
+      extension: "epub",
+      filesize: "3.64 MB",
+      downloadPath: "/dl/1mx08wvymd",
+      lowQuality: true,
+    },
+  ]);
+});
+
+test("returns an empty list for malformed formats payloads", () => {
+  assert.deepEqual(parseZlibFormats("not json"), []);
+  assert.deepEqual(parseZlibFormats("{}"), []);
+  assert.deepEqual(parseZlibFormats('{"books":"nope"}'), []);
 });
