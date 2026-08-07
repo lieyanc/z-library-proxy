@@ -22,6 +22,8 @@ test("validates CIDv0 and base32 CIDv1 values", () => {
 test("authorizes only exact configured CIDs and safe paths", () => {
   assert.equal(isCidAllowed(CID_V0, `${CID_V1}, ${CID_V0}`), true);
   assert.equal(isCidAllowed(CID_V0, CID_V1), false);
+  assert.equal(isCidAllowed(CID_V0, "*"), true);
+  assert.equal(isCidAllowed("../../metadata", "*"), false);
   assert.equal(normalizeIpfsPath("books/alice.epub"), "books/alice.epub");
   assert.throws(() => normalizeIpfsPath("../secret"), /Invalid IPFS path/);
 });

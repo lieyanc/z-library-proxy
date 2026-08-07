@@ -161,27 +161,25 @@ export const PATCH_JS = String.raw`
         label.textContent = gateway.label;
         var speed = document.createElement('span');
         speed.className = 'zp-speed';
-        speed.textContent = gateway.ok ? gateway.latencyMs + ' ms · ' + gateway.kibPerSecond + ' KiB/s' : '不可用';
+        speed.textContent = gateway.ok ? gateway.latencyMs + ' ms · ' + gateway.kibPerSecond + ' KiB/s' : '测速超时';
         row.appendChild(label);
         row.appendChild(speed);
-        if (gateway.ok) {
-          var actions = document.createElement('div');
-          actions.className = 'zp-gateway-actions';
-          if (gateway.proxyUrl) {
-            var proxyDownload = document.createElement('a');
-            proxyDownload.href = gateway.proxyUrl;
-            proxyDownload.textContent = '代理下载';
-            actions.appendChild(proxyDownload);
-          }
-          var directDownload = document.createElement('a');
-          directDownload.className = gateway.proxyUrl ? 'zp-direct-link' : '';
-          directDownload.href = gateway.url;
-          directDownload.target = '_blank';
-          directDownload.rel = 'noopener noreferrer';
-          directDownload.textContent = gateway.proxyUrl ? '直连' : '打开';
-          actions.appendChild(directDownload);
-          row.appendChild(actions);
+        var actions = document.createElement('div');
+        actions.className = 'zp-gateway-actions';
+        if (gateway.proxyUrl) {
+          var proxyDownload = document.createElement('a');
+          proxyDownload.href = gateway.proxyUrl;
+          proxyDownload.textContent = '代理下载';
+          actions.appendChild(proxyDownload);
         }
+        var directDownload = document.createElement('a');
+        directDownload.className = gateway.proxyUrl ? 'zp-direct-link' : '';
+        directDownload.href = gateway.url;
+        directDownload.target = '_blank';
+        directDownload.rel = 'noopener noreferrer';
+        directDownload.textContent = gateway.proxyUrl ? '直连' : '打开';
+        actions.appendChild(directDownload);
+        row.appendChild(actions);
         body.appendChild(row);
       });
       addText(

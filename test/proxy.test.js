@@ -71,6 +71,7 @@ test("rejects valid but unauthorized IPFS proxy downloads", async () => {
 
 test("keeps the selected CID available when an IPFS probe fails", () => {
   assert.match(PATCH_JS, /addText\(body, 'zp-ipfs-cid', details\.cid\)/);
+  assert.doesNotMatch(PATCH_JS, /if \(gateway\.ok\) \{/);
 });
 
 test("rewrites only absolute URLs for the configured upstream", () => {

@@ -10,7 +10,7 @@
 - 源站反爬挑战（SHA-1 PoW）由浏览器本地求解：Worker 遇到挑战时把挑战参数以 JSON 下发（503 + `challenge`），前端求解后经 `POST /__z/api/challenge` 回传 token，Worker 存入 isolate 级会话 jar 并重放原请求；全程自动，前端显示“正在通过人机验证…”。Worker 也内置了 WebCrypto 求解器作为代理页面流的兜底，并对 502/503/504 做退避重试。
 - 源站搜索页注入精简工具栏并压缩广告、页脚等非核心区域。
 - 页面出现 `ipfs://`、`/ipfs/<CID>` 或 `data-cid` 时提供 IPFS 网关测速。测速仅访问 `dweb.link`、`ipfs.io` 和 `w3s.link`，每个网关最多读取 64 KiB。
-- 已加入授权列表的 CID 可通过当前 Worker 流式代理下载，支持 `HEAD`、`Range`、`ETag` 和网关故障切换；未授权 CID 只显示网关直连。
+- 已授权的 CID 可通过当前 Worker 流式代理下载，支持 `HEAD`、`Range`、`ETag` 和网关故障切换；未授权 CID 只显示网关直连。
 
 ### 授权书库 API
 
@@ -37,7 +37,7 @@ remix_userid=<你的 userid>; remix_userkey=<你的 userkey>
 
 ### 授权 IPFS 代理下载
 
-为避免部署后成为任意内容代理，`ALLOWED_IPFS_CIDS` 默认为空。将你有权分发的根 CID 以逗号或空格分隔后写入 [`wrangler.jsonc`](./wrangler.jsonc)：
+`ALLOWED_IPFS_CIDS` 支持以逗号或空格分隔的根 CID 白名单，也支持 `*` 放行任意格式合法的 CID。当前部署使用 `*`，以便详情页动态返回的 IPFS CID 可以直接下载；如果站点对外开放且只分发固定内容，应改为精确 CID 列表：
 
 ```jsonc
 "vars": {
@@ -45,6 +45,8 @@ remix_userid=<你的 userid>; remix_userkey=<你的 userkey>
   "UPSTREAM_ORIGIN": "https://z-lib.sk"
 }
 ```
+
+设置为空字符串会完全关闭 Worker IPFS 代理下载，仅保留公共网关直连。
 
 提交并推送后，Cloudflare Workers Builds 会自动部署新授权列表。代理下载地址格式为：
 

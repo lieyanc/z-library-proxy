@@ -36,7 +36,7 @@ export function isCidAllowed(cid, configuredCids) {
   return configuredCids
     .split(/[\s,]+/)
     .filter(Boolean)
-    .some((allowedCid) => allowedCid === cid);
+    .some((allowedCid) => allowedCid === "*" || allowedCid === cid);
 }
 
 export function normalizeIpfsPath(value) {

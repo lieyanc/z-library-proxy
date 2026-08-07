@@ -81,33 +81,31 @@ function IpfsRow({ cid, filename }: { cid: string; filename: string }) {
             <div key={gateway.id} className="flex items-center justify-between gap-2 text-xs">
               <span className="font-medium">{gateway.label}</span>
               <span className="text-muted-foreground">
-                {gateway.ok ? `${gateway.latencyMs} ms · ${gateway.kibPerSecond} KiB/s` : "不可用"}
+                {gateway.ok ? `${gateway.latencyMs} ms · ${gateway.kibPerSecond} KiB/s` : "测速超时"}
               </span>
-              {gateway.ok && (
-                <span className="flex gap-1.5">
-                  {gateway.proxyUrl && (
-                    <Button
-                      size="sm"
-                      render={
-                        <a
-                          href={safeUrl(
-                            `${gateway.proxyUrl}&filename=${encodeURIComponent(filename)}`,
-                          ) ?? "#"}
-                        />
-                      }
-                    >
-                      代理下载
-                    </Button>
-                  )}
+              <span className="flex gap-1.5">
+                {gateway.proxyUrl && (
                   <Button
                     size="sm"
-                    variant={gateway.proxyUrl ? "outline" : "default"}
-                    render={<a href={safeUrl(gateway.url) ?? "#"} target="_blank" rel="noopener noreferrer" />}
+                    render={
+                      <a
+                        href={safeUrl(
+                          `${gateway.proxyUrl}&filename=${encodeURIComponent(filename)}`,
+                        ) ?? "#"}
+                      />
+                    }
                   >
-                    直连
+                    代理下载
                   </Button>
-                </span>
-              )}
+                )}
+                <Button
+                  size="sm"
+                  variant={gateway.proxyUrl ? "outline" : "default"}
+                  render={<a href={safeUrl(gateway.url) ?? "#"} target="_blank" rel="noopener noreferrer" />}
+                >
+                  直连
+                </Button>
+              </span>
             </div>
           ))}
           {!probe.proxyAllowed && (

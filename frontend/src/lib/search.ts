@@ -78,7 +78,7 @@ export interface IpfsGatewayProbe {
   label: string
   url: string
   ok: boolean
-  latencyMs: number
+  latencyMs: number | null
   kibPerSecond: number
   proxyUrl: string | null
 }
