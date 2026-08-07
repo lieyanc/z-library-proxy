@@ -417,7 +417,8 @@ async function handleInternalRequest(request, requestUrl, env) {
 
   if (requestUrl.pathname === "/__z/api/zbook") {
     const bookPath = requestUrl.searchParams.get("path") || "";
-    if (!/^\/book\/[A-Za-z0-9]+\/[A-Za-z0-9._-]*\.html$/.test(bookPath)) {
+    // Slugs of non-ASCII titles arrive percent-encoded (e.g. %E4%BD%99).
+    if (!/^\/book\/[A-Za-z0-9]+\/(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*\.html$/.test(bookPath)) {
       return jsonResponse({ error: "Invalid book path" }, { status: 400 });
     }
 

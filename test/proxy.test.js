@@ -58,6 +58,53 @@ test("rejects invalid CIDs before probing a gateway", async () => {
   assert.deepEqual(await response.json(), { error: "Invalid CID" });
 });
 
+test("accepts percent-encoded book slugs for the book API", async (context) => {
+  const originalFetch = globalThis.fetch;
+  let forwardedUrl;
+
+  globalThis.fetch = async (url) => {
+    forwardedUrl = url;
+    return new Response('<h1 class="book-title">余华全集</h1>', {
+      status: 200,
+      headers: { "Content-Type": "text/html" },
+    });
+  };
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const slug = "%E4%BD%99%E5%8D%8E%E5%85%A8%E9%9B%86%E5%85%B113%E5%86%8C";
+  const bookPath = `/book/2z6LlvXK5m/${slug}.html`;
+  const response = await worker.fetch(
+    new Request(`https://books.example.com/__z/api/zbook?path=${encodeURIComponent(bookPath)}`),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+
+  assert.equal(forwardedUrl, `https://z-lib.sk${bookPath}`);
+  assert.equal(response.status, 200);
+  const book = await response.json();
+  assert.equal(book.title, "余华全集");
+  assert.equal(book.bookPath, bookPath);
+});
+
+test("rejects invalid book paths for the book API", async () => {
+  for (const path of [
+    "",
+    "/book/2z6LlvXK5m",
+    "/book/2z6LlvXK5m/%zz.html",
+    "/book/2z6LlvXK5m/a/b.html",
+    "/dl/abc.html",
+    "/book/2z6LlvXK5m/book.html?x=1",
+  ]) {
+    const response = await worker.fetch(
+      new Request(`https://books.example.com/__z/api/zbook?path=${encodeURIComponent(path)}`),
+      { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+    );
+    assert.equal(response.status, 400, path);
+    assert.deepEqual(await response.json(), { error: "Invalid book path" });
+  }
+});
+
 test("rejects invalid book ids for the formats API", async () => {
   for (const id of ["", "abc", "1'.union", "1234567890123"]) {
     const response = await worker.fetch(
