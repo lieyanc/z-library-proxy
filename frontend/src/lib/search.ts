@@ -1,3 +1,6 @@
+import type { Challenge } from "@/lib/pow"
+import { solveChallenge, submitChallengeSolution } from "@/lib/pow"
+
 export interface BookDownload {
   label: string
   href: string
@@ -56,6 +59,7 @@ export interface ZlibSearchPayload {
   query: string
   page: number
   results: Book[]
+  challenge?: Challenge | null
   sources: {
     zlib: CatalogSource
   }
@@ -105,26 +109,60 @@ export async function searchBooks(query: string): Promise<SearchPayload> {
   return response.json()
 }
 
-export async function searchZlib(query: string, page = 1): Promise<ZlibSearchPayload> {
-  const params = new URLSearchParams({ q: query })
-  if (page > 1) params.set("page", String(page))
-  const response = await fetch(`/__z/api/zsearch?${params}`, {
-    headers: { Accept: "application/json" },
-  })
+// Fetches a JSON API that may answer with a delegated PoW challenge
+// (503 + challenge payload). Solves it locally, submits the token to the
+// worker, and retries. `onVerifying` fires while a solve is in progress.
+async function fetchWithChallenge<T>(
+  url: string,
+  onVerifying?: (verifying: boolean) => void,
+): Promise<T> {
+  let response = await fetch(url, { headers: { Accept: "application/json" } })
+
+  for (let attempt = 0; attempt < 3 && response.status === 503; attempt += 1) {
+    const payload = await response.json().catch(() => null)
+    const challenge = payload?.challenge as Challenge | undefined
+    if (!challenge) break
+
+    onVerifying?.(true)
+    let solved = false
+    try {
+      const solution = await solveChallenge(challenge)
+      if (solution) {
+        await submitChallengeSolution(solution)
+        solved = true
+      }
+    } finally {
+      onVerifying?.(false)
+    }
+    if (!solved) break
+
+    response = await fetch(url, { headers: { Accept: "application/json" } })
+  }
+
   if (!response.ok) {
-    throw new Error(`Z-Library search failed with status ${response.status}`)
+    throw new Error(`Request failed with status ${response.status}`)
   }
   return response.json()
 }
 
-export async function fetchZlibBook(bookPath: string): Promise<ZlibBookDetail> {
-  const response = await fetch(`/__z/api/zbook?path=${encodeURIComponent(bookPath)}`, {
-    headers: { Accept: "application/json" },
-  })
-  if (!response.ok) {
-    throw new Error(`Book details failed with status ${response.status}`)
-  }
-  return response.json()
+export async function searchZlib(
+  query: string,
+  page = 1,
+  onVerifying?: (verifying: boolean) => void,
+): Promise<ZlibSearchPayload> {
+  const params = new URLSearchParams({ q: query })
+  if (page > 1) params.set("page", String(page))
+  return fetchWithChallenge<ZlibSearchPayload>(`/__z/api/zsearch?${params}`, onVerifying)
+}
+
+export async function fetchZlibBook(
+  bookPath: string,
+  onVerifying?: (verifying: boolean) => void,
+): Promise<ZlibBookDetail> {
+  return fetchWithChallenge<ZlibBookDetail>(
+    `/__z/api/zbook?path=${encodeURIComponent(bookPath)}`,
+    onVerifying,
+  )
 }
 
 export async function probeIpfsGateways(cid: string): Promise<IpfsProbePayload> {

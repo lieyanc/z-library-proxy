@@ -218,6 +218,16 @@ function responseWithText(text, response) {
   });
 }
 
+// Thrown in delegate mode: the caller (browser frontend) should solve the
+// challenge locally and POST the token to /__z/api/challenge.
+export class ChallengeRequiredError extends Error {
+  constructor(challenge) {
+    super("Upstream challenge must be solved by the client");
+    this.name = "ChallengeRequiredError";
+    this.challenge = challenge;
+  }
+}
+
 export function looksLikeChallenge(response) {
   if (response.status !== 503) {
     return false;
@@ -228,7 +238,14 @@ export function looksLikeChallenge(response) {
 
 // Fetches an upstream URL, transparently solving the PoW challenge and
 // retrying transient 5xx failures. Returns the final upstream response.
-export async function fetchUpstream(url, init, { origin, fetchImpl = fetch } = {}) {
+// With delegateChallenge: true the challenge is not solved here; a
+// ChallengeRequiredError carrying the parsed challenge is thrown instead so
+// the caller can hand it to the visitor's browser.
+export async function fetchUpstream(
+  url,
+  init,
+  { origin, fetchImpl = fetch, delegateChallenge = false } = {},
+) {
   const sessionOrigin = origin || new URL(url).origin;
   let solves = 0;
 
@@ -263,16 +280,18 @@ export async function fetchUpstream(url, init, { origin, fetchImpl = fetch } = {
     // return them unchanged without leaving a consumed body behind.
     const text = await response.text();
 
-    if (
-      response.status === 503 &&
-      text.includes(CHALLENGE_TITLE) &&
-      solves < MAX_SOLVES_PER_REQUEST &&
-      attempt + 1 < MAX_ATTEMPTS
-    ) {
-      solves += 1;
-      const solved = await solveWithLock(sessionOrigin, text);
-      if (solved) {
-        continue;
+    if (response.status === 503 && text.includes(CHALLENGE_TITLE)) {
+      if (delegateChallenge) {
+        const challenge = parseChallenge(text);
+        if (challenge) {
+          throw new ChallengeRequiredError(challenge);
+        }
+      } else if (solves < MAX_SOLVES_PER_REQUEST && attempt + 1 < MAX_ATTEMPTS) {
+        solves += 1;
+        const solved = await solveWithLock(sessionOrigin, text);
+        if (solved) {
+          continue;
+        }
       }
     }
 

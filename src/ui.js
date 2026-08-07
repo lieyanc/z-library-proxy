@@ -1,6 +1,6 @@
 // The home page frontend is a React + shadcn/ui app built from frontend/.
 // Its bundles are embedded by scripts/generate-assets.mjs into this module.
-import { APP_CSS, APP_JS } from "./assets.generated.js";
+import { APP_CSS, APP_JS, ASSETS_VERSION } from "./assets.generated.js";
 
 export { APP_CSS, APP_JS };
 
@@ -31,12 +31,12 @@ export function renderHomePage(query = "") {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>书库</title>
-  <link rel="stylesheet" href="/__z/assets/app.css">
+  <link rel="stylesheet" href="/__z/assets/app.css?v=${ASSETS_VERSION}">
   <script>${THEME_INIT_SCRIPT}</script>
 </head>
 <body>
   <div id="root" data-query="${safeQuery}"></div>
-  <script type="module" src="/__z/assets/app.js"></script>
+  <script type="module" src="/__z/assets/app.js?v=${ASSETS_VERSION}"></script>
 </body>
 </html>`;
 }

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 
+import worker from "../src/index.js";
 import {
+  ChallengeRequiredError,
   fetchUpstream,
   getSessionCookies,
   parseChallenge,
@@ -123,4 +125,66 @@ test("returns the upstream error page untouched after retries are exhausted", as
 
   assert.equal(response.status, 502);
   assert.equal(await response.text(), "<html>still broken</html>");
+});
+
+test("delegate mode surfaces the challenge and keeps the bsrv cookie", async () => {
+  const origin = "https://delegate.test";
+  const fetchImpl = async () =>
+    new Response(CHALLENGE_HTML, {
+      status: 503,
+      headers: {
+        "Content-Type": "text/html;charset=utf-8",
+        "Set-Cookie": "bsrv=delegatebsrv; path=/",
+      },
+    });
+
+  await assert.rejects(
+    fetchUpstream(`${origin}/s/test`, {}, { fetchImpl, delegateChallenge: true }),
+    (error) => {
+      assert.ok(error instanceof ChallengeRequiredError);
+      assert.equal(error.challenge.salt, "5DF2217304C9448892E026858C3CB92E301A725E");
+      assert.equal(error.challenge.index, 5);
+      return true;
+    },
+  );
+  assert.equal(getSessionCookies(origin).bsrv, "delegatebsrv");
+});
+
+test("stores browser-solved challenge tokens via the API", async () => {
+  const response = await worker.fetch(
+    new Request("https://books.example.com/__z/api/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: "5DF2217304C9448892E026858C3CB92E301A725E6494",
+        seconds: 1.234,
+      }),
+    }),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true });
+  assert.equal(
+    getSessionCookies("https://z-lib.sk").c_token,
+    "5DF2217304C9448892E026858C3CB92E301A725E6494",
+  );
+});
+
+test("rejects malformed challenge submissions", async () => {
+  const badToken = await worker.fetch(
+    new Request("https://books.example.com/__z/api/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "not-a-token", seconds: 1 }),
+    }),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+  assert.equal(badToken.status, 400);
+
+  const badMethod = await worker.fetch(
+    new Request("https://books.example.com/__z/api/challenge"),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+  assert.equal(badMethod.status, 405);
 });

@@ -1,5 +1,5 @@
 import { searchOpenCatalogs } from "./catalog.js";
-import { fetchUpstream } from "./challenge.js";
+import { ChallengeRequiredError, fetchUpstream, storeSessionCookies } from "./challenge.js";
 import { COVER_HOSTS, parseZlibBook, parseZlibSearch } from "./zlib.js";
 import {
   isCidAllowed,
@@ -322,6 +322,10 @@ function buildIpfsProxyUrl(cid, path, filename, gatewayId) {
 }
 
 async function handleInternalRequest(request, requestUrl, env) {
+  if (requestUrl.pathname === "/__z/api/challenge") {
+    return handleChallengeSubmission(request, env);
+  }
+
   if (request.method !== "GET" && request.method !== "HEAD") {
     return methodNotAllowed();
   }
@@ -399,6 +403,12 @@ async function handleInternalRequest(request, requestUrl, env) {
     const page = Math.min(Math.max(Number.parseInt(requestUrl.searchParams.get("page") || "1", 10) || 1, 1), 100);
 
     const results = await searchZlibCatalog(query, page, env);
+    if (results.challenge) {
+      return jsonResponse(results, {
+        status: 503,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
     return jsonResponse(results, {
       headers: { "Cache-Control": "public, max-age=60, stale-while-revalidate=300" },
     });
@@ -411,6 +421,12 @@ async function handleInternalRequest(request, requestUrl, env) {
     }
 
     const book = await fetchZlibBook(bookPath, env);
+    if (book?.challenge) {
+      return jsonResponse(book, {
+        status: 503,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
     if (!book) {
       return jsonResponse({ error: "Book page could not be parsed" }, { status: 502 });
     }
@@ -453,6 +469,48 @@ async function handleInternalRequest(request, requestUrl, env) {
   return new Response("Not Found", { status: 404 });
 }
 
+const CHALLENGE_TOKEN_RE = /^[0-9A-Fa-f]{40}\d{1,10}$/;
+
+// Accepts a PoW solution computed by the visitor's browser and stores it in
+// the upstream session jar for subsequent API/proxy fetches.
+async function handleChallengeSubmission(request, env) {
+  if (request.method !== "POST") {
+    return methodNotAllowed("POST");
+  }
+
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const token = typeof payload?.token === "string" ? payload.token : "";
+  const seconds = Number(payload?.seconds);
+  if (
+    !CHALLENGE_TOKEN_RE.test(token) ||
+    !Number.isFinite(seconds) ||
+    seconds < 0 ||
+    seconds > 600
+  ) {
+    return jsonResponse({ error: "Invalid challenge solution" }, { status: 400 });
+  }
+
+  let upstream;
+  try {
+    upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
+  } catch (error) {
+    console.error(error);
+    return new Response("Worker configuration error", { status: 500 });
+  }
+
+  storeSessionCookies(upstream.origin, {
+    c_token: token,
+    c_time: seconds.toFixed(3),
+  });
+  return jsonResponse({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+}
+
 const ZLIB_FETCH_HEADERS = {
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   "Accept-Language": "en-US,en;q=0.9",
@@ -466,7 +524,7 @@ async function fetchZlibPage(pathAndQuery, env) {
     headers: ZLIB_FETCH_HEADERS,
     redirect: "manual",
     signal: AbortSignal.timeout(20000),
-  });
+  }, { delegateChallenge: true });
   if (!response.ok) {
     throw new Error(`Upstream catalog returned ${response.status}`);
   }
@@ -478,20 +536,26 @@ async function searchZlibCatalog(query, page, env) {
   let results = [];
   let ok = false;
   let error = null;
+  let challenge = null;
   try {
     const pageSuffix = page > 1 ? `?page=${page}` : "";
     const html = await fetchZlibPage(`/s/${encodeURIComponent(normalizedQuery)}${pageSuffix}`, env);
     results = parseZlibSearch(html);
     ok = true;
   } catch (caught) {
-    error = String(caught);
-    console.error("Z-Library search failed", caught);
+    if (caught instanceof ChallengeRequiredError) {
+      challenge = caught.challenge;
+    } else {
+      error = String(caught);
+      console.error("Z-Library search failed", caught);
+    }
   }
 
   return {
     query: normalizedQuery,
     page,
     results,
+    challenge,
     sources: { zlib: { ok, count: results.length, error } },
   };
 }
@@ -501,6 +565,9 @@ async function fetchZlibBook(bookPath, env) {
     const html = await fetchZlibPage(bookPath, env);
     return parseZlibBook(html, bookPath);
   } catch (error) {
+    if (error instanceof ChallengeRequiredError) {
+      return { challenge: error.challenge };
+    }
     console.error("Z-Library book fetch failed", error);
     return null;
   }

@@ -7,18 +7,19 @@
 - `/` 使用精简搜索首页，不加载源站首页的其他模块。
 - 开放资源搜索同时接入 Project Gutenberg 和 Open Library。Gutenberg 结果强制要求 `copyright=false`，Open Library 结果强制要求 `ebook_access=public` 和 `public_scan_b=true`。
 - “授权书库”搜索不再跳转源站页面：Worker 在服务端抓取并解析源站结果页（`<z-bookcard>`），以自有界面渲染；点击结果弹出书籍详情对话框（元数据、简介、下载入口、IPFS 网关测速），封面经 `/__z/cover` 同源代理。登录、Cookie 和授权下载仍由源站处理。
-- Worker 内置源站反爬挑战（SHA-1 PoW，`c_token`/`c_time`）求解器与 502/503/504 退避重试，会话 Cookie 在 isolate 内缓存复用；求解失败时挑战页会原样透传给浏览器，由浏览器自行完成挑战。
+- 源站反爬挑战（SHA-1 PoW）由浏览器本地求解：Worker 遇到挑战时把挑战参数以 JSON 下发（503 + `challenge`），前端求解后经 `POST /__z/api/challenge` 回传 token，Worker 存入 isolate 级会话 jar 并重放原请求；全程自动，前端显示“正在通过人机验证…”。Worker 也内置了 WebCrypto 求解器作为代理页面流的兜底，并对 502/503/504 做退避重试。
 - 源站搜索页注入精简工具栏并压缩广告、页脚等非核心区域。
 - 页面出现 `ipfs://`、`/ipfs/<CID>` 或 `data-cid` 时提供 IPFS 网关测速。测速仅访问 `dweb.link`、`ipfs.io` 和 `w3s.link`，每个网关最多读取 64 KiB。
 - 已加入授权列表的 CID 可通过当前 Worker 流式代理下载，支持 `HEAD`、`Range`、`ETag` 和网关故障切换；未授权 CID 只显示网关直连。
 
 ### 授权书库 API
 
-- `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。
-- `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径）。
+- `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。源站挑战时返回 `503 + {challenge}`。
+- `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径）。挑战时同样返回 `503 + {challenge}`。
+- `POST /__z/api/challenge` — 提交浏览器求解的 `{token, seconds}`，存入上游会话 jar。
 - `GET /__z/cover?u=<封面URL>` — 封面图代理，仅允许 `covers.z-lib.sk` / `covers.z-library.sk`。
 
-挑战求解平均需要约 6.5 万次 SHA-1。求解器使用 WebCrypto（`crypto.subtle` 不计入 Workers CPU 时间），在免费版 10 ms CPU 限额下也能工作；求解只在每个 isolate 建立会话时发生一次，且有 wall-clock 预算上限，失败时挑战页会回退为透传给浏览器求解，功能不受影响。
+PoW 求解（平均约 6.5 万次 SHA-1）默认在浏览器本地完成，Worker 零 CPU 负担，免费版即可运行；Worker 内置的 WebCrypto 兜底求解器（`crypto.subtle` 不计入 CPU 时间）只服务直接访问代理页面的场景。
 
 ### 授权 IPFS 代理下载
 

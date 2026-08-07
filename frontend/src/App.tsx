@@ -39,10 +39,10 @@ type SearchState =
   | { status: "done"; mode: Mode; payload: SearchPayload | ZlibSearchPayload }
   | { status: "error"; mode: Mode }
 
-function statusText(state: SearchState): string {
+function statusText(state: SearchState, verifying: boolean): string {
   switch (state.status) {
     case "loading":
-      return "搜索中…"
+      return verifying ? "正在通过人机验证…" : "搜索中…"
     case "done":
       return `${state.payload.results.length} 项结果`
     case "error":
@@ -100,6 +100,7 @@ export default function App({ initialQuery }: { initialQuery: string }) {
   const [mode, setMode] = useState<Mode>("open")
   const [query, setQuery] = useState(initialQuery)
   const [state, setState] = useState<SearchState>({ status: "idle" })
+  const [verifying, setVerifying] = useState(false)
   const [selectedBook, setSelectedBook] = useState<Book | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
 
@@ -107,13 +108,18 @@ export default function App({ initialQuery }: { initialQuery: string }) {
     const trimmed = value.trim()
     if (!trimmed) return
     history.replaceState(null, "", `/?q=${encodeURIComponent(trimmed)}`)
+    setVerifying(false)
     setState({ status: "loading", mode: searchMode })
     try {
       const payload =
-        searchMode === "source" ? await searchZlib(trimmed) : await searchBooks(trimmed)
+        searchMode === "source"
+          ? await searchZlib(trimmed, 1, setVerifying)
+          : await searchBooks(trimmed)
       setState({ status: "done", mode: searchMode, payload })
     } catch {
       setState({ status: "error", mode: searchMode })
+    } finally {
+      setVerifying(false)
     }
   }, [])
 
@@ -223,7 +229,7 @@ export default function App({ initialQuery }: { initialQuery: string }) {
               <h2 className="text-lg font-semibold">
                 {state.mode === "source" ? "授权书库" : "开放资源"}
               </h2>
-              <p className="text-sm text-muted-foreground">{statusText(state)}</p>
+              <p className="text-sm text-muted-foreground">{statusText(state, verifying)}</p>
             </div>
             <Separator />
             {state.status === "done" && (
