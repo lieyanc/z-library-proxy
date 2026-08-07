@@ -4,6 +4,12 @@
   "main": "src/index.js",
   "compatibility_date": "2026-08-05",
   "workers_dev": true,
+  // The PoW challenge solver needs more than the 10 ms free-plan CPU budget;
+  // on the paid plan this raises the limit. On the free plan the solver may
+  // hit the cap and the browser falls back to solving the challenge itself.
+  "limits": {
+    "cpu_ms": 30000
+  },
   "vars": {
     "ALLOWED_IPFS_CIDS": "",
     "UPSTREAM_ORIGIN": "https://z-lib.sk"

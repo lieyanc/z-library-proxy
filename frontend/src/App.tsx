@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { BookOpenIcon, SearchIcon, SearchXIcon } from "lucide-react"
 
 import { BookCard } from "@/components/book-card"
+import { BookDetailDialog } from "@/components/book-detail-dialog"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -22,14 +23,21 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import type { CatalogSource, SearchPayload } from "@/lib/search"
-import { searchBooks, sourceSearchUrl } from "@/lib/search"
+import type {
+  Book,
+  CatalogSource,
+  SearchPayload,
+  ZlibSearchPayload,
+} from "@/lib/search"
+import { searchBooks, searchZlib } from "@/lib/search"
+
+type Mode = "open" | "source"
 
 type SearchState =
   | { status: "idle" }
-  | { status: "loading" }
-  | { status: "done"; payload: SearchPayload }
-  | { status: "error" }
+  | { status: "loading"; mode: Mode }
+  | { status: "done"; mode: Mode; payload: SearchPayload | ZlibSearchPayload }
+  | { status: "error"; mode: Mode }
 
 function statusText(state: SearchState): string {
   switch (state.status) {
@@ -89,29 +97,49 @@ function EmptyState({
 }
 
 export default function App({ initialQuery }: { initialQuery: string }) {
+  const [mode, setMode] = useState<Mode>("open")
   const [query, setQuery] = useState(initialQuery)
   const [state, setState] = useState<SearchState>({ status: "idle" })
+  const [selectedBook, setSelectedBook] = useState<Book | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
 
-  const runSearch = useCallback(async (value: string) => {
+  const runSearch = useCallback(async (value: string, searchMode: Mode) => {
     const trimmed = value.trim()
     if (!trimmed) return
     history.replaceState(null, "", `/?q=${encodeURIComponent(trimmed)}`)
-    setState({ status: "loading" })
+    setState({ status: "loading", mode: searchMode })
     try {
-      const payload = await searchBooks(trimmed)
-      setState({ status: "done", payload })
+      const payload =
+        searchMode === "source" ? await searchZlib(trimmed) : await searchBooks(trimmed)
+      setState({ status: "done", mode: searchMode, payload })
     } catch {
-      setState({ status: "error" })
+      setState({ status: "error", mode: searchMode })
     }
   }, [])
 
+  const switchMode = useCallback(
+    (nextMode: Mode) => {
+      setMode(nextMode)
+      if (query.trim()) {
+        void runSearch(query, nextMode)
+      }
+    },
+    [query, runSearch],
+  )
+
   useEffect(() => {
     if (initialQuery.trim()) {
-      void runSearch(initialQuery)
+      void runSearch(initialQuery, "open")
     }
   }, [initialQuery, runSearch])
 
+  const openDetail = useCallback((book: Book) => {
+    setSelectedBook(book)
+    setDetailOpen(true)
+  }, [])
+
   const loading = state.status === "loading"
+  const results = state.status === "done" ? state.payload.results : []
 
   return (
     <div className="flex min-h-svh flex-col">
@@ -144,7 +172,7 @@ export default function App({ initialQuery }: { initialQuery: string }) {
             role="search"
             onSubmit={(event) => {
               event.preventDefault()
-              void runSearch(query)
+              void runSearch(query, mode)
             }}
           >
             <InputGroup className="h-11">
@@ -175,10 +203,12 @@ export default function App({ initialQuery }: { initialQuery: string }) {
           </form>
           <ToggleGroup
             variant="outline"
-            value={["open"]}
+            value={[mode]}
             onValueChange={(values) => {
               if (values.includes("source")) {
-                location.href = sourceSearchUrl(query)
+                switchMode("source")
+              } else if (values.includes("open")) {
+                switchMode("open")
               }
             }}
             aria-label="搜索范围"
@@ -190,20 +220,31 @@ export default function App({ initialQuery }: { initialQuery: string }) {
         {state.status !== "idle" && (
           <section aria-live="polite" className="flex flex-col gap-4">
             <div className="flex items-baseline justify-between gap-4">
-              <h2 className="text-lg font-semibold">开放资源</h2>
+              <h2 className="text-lg font-semibold">
+                {state.mode === "source" ? "授权书库" : "开放资源"}
+              </h2>
               <p className="text-sm text-muted-foreground">{statusText(state)}</p>
             </div>
             <Separator />
             {state.status === "done" && (
               <div className="flex flex-wrap gap-2">
-                <SourceBadge
-                  label="Project Gutenberg"
-                  source={state.payload.sources.gutenberg}
-                />
-                <SourceBadge
-                  label="Open Library"
-                  source={state.payload.sources.openlibrary}
-                />
+                {state.mode === "source" ? (
+                  <SourceBadge
+                    label="Z-Library"
+                    source={(state.payload as ZlibSearchPayload).sources.zlib}
+                  />
+                ) : (
+                  <>
+                    <SourceBadge
+                      label="Project Gutenberg"
+                      source={(state.payload as SearchPayload).sources.gutenberg}
+                    />
+                    <SourceBadge
+                      label="Open Library"
+                      source={(state.payload as SearchPayload).sources.openlibrary}
+                    />
+                  </>
+                )}
               </div>
             )}
             {state.status === "loading" && (
@@ -214,31 +255,43 @@ export default function App({ initialQuery }: { initialQuery: string }) {
               </div>
             )}
             {state.status === "done" &&
-              (state.payload.results.length > 0 ? (
+              (results.length > 0 ? (
                 <ol className="flex flex-col gap-4">
-                  {state.payload.results.map((book) => (
+                  {results.map((book) => (
                     <li key={book.id}>
-                      <BookCard book={book} />
+                      <BookCard
+                        book={book}
+                        onSelect={state.mode === "source" ? openDetail : undefined}
+                      />
                     </li>
                   ))}
                 </ol>
               ) : (
                 <EmptyState
                   icon={BookOpenIcon}
-                  title="没有找到可公开阅读的结果"
-                  description="换个关键词试试，或切换到授权书库搜索"
+                  title={state.mode === "source" ? "授权书库没有匹配结果" : "没有找到可公开阅读的结果"}
+                  description="换个关键词试试"
                 />
               ))}
             {state.status === "error" && (
               <EmptyState
                 icon={SearchXIcon}
                 title="搜索暂不可用"
-                description="开放资源服务暂时不可用，请稍后再试"
+                description={
+                  state.mode === "source"
+                    ? "授权书库服务暂时不可用，请稍后再试"
+                    : "开放资源服务暂时不可用，请稍后再试"
+                }
               />
             )}
           </section>
         )}
       </main>
+      <BookDetailDialog
+        book={selectedBook}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+      />
     </div>
   )
 }

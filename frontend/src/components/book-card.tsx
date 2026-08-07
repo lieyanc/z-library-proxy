@@ -57,8 +57,15 @@ function BookCover({ cover }: { cover: string | null }) {
   )
 }
 
-export function BookCard({ book }: { book: Book }) {
+export function BookCard({
+  book,
+  onSelect,
+}: {
+  book: Book
+  onSelect?: (book: Book) => void
+}) {
   const downloads = book.downloads.slice(0, 3)
+  const isZlib = book.source === "zlib"
 
   return (
     <Card className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-3">
@@ -67,14 +74,24 @@ export function BookCard({ book }: { book: Book }) {
       </div>
       <CardHeader className="gap-1 px-0 pr-4 sm:pr-6">
         <CardTitle className="text-base leading-snug">
-          <a
-            href={safeUrl(book.details) ?? "#"}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-primary hover:underline"
-          >
-            {book.title}
-          </a>
+          {isZlib && onSelect ? (
+            <button
+              type="button"
+              onClick={() => onSelect(book)}
+              className="text-left hover:text-primary hover:underline"
+            >
+              {book.title}
+            </button>
+          ) : (
+            <a
+              href={safeUrl(book.details) ?? "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-primary hover:underline"
+            >
+              {book.title}
+            </a>
+          )}
         </CardTitle>
         <CardDescription>
           {book.authors.join("、") || "作者未知"}
@@ -89,9 +106,18 @@ export function BookCard({ book }: { book: Book }) {
             {book.languages.join(" / ").toUpperCase()}
           </Badge>
         )}
+        {book.extension && (
+          <Badge variant="outline">{book.extension.toUpperCase()}</Badge>
+        )}
+        {book.filesize && <Badge variant="outline">{book.filesize}</Badge>}
+        {book.rating && <Badge variant="outline">★ {book.rating}</Badge>}
       </CardContent>
       <CardFooter className="flex flex-wrap gap-2 px-0 pr-4 sm:pr-6">
-        {downloads.length > 0 ? (
+        {isZlib && onSelect ? (
+          <Button size="sm" onClick={() => onSelect(book)}>
+            查看详情
+          </Button>
+        ) : downloads.length > 0 ? (
           <>
             {downloads.map((download, index) => (
               <ActionLink

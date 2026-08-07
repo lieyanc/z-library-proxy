@@ -6,10 +6,19 @@
 
 - `/` 使用精简搜索首页，不加载源站首页的其他模块。
 - 开放资源搜索同时接入 Project Gutenberg 和 Open Library。Gutenberg 结果强制要求 `copyright=false`，Open Library 结果强制要求 `ebook_access=public` 和 `public_scan_b=true`。
-- “授权书库”搜索进入源站结果页，登录、Cookie、详情和授权下载仍由源站处理。
+- “授权书库”搜索不再跳转源站页面：Worker 在服务端抓取并解析源站结果页（`<z-bookcard>`），以自有界面渲染；点击结果弹出书籍详情对话框（元数据、简介、下载入口、IPFS 网关测速），封面经 `/__z/cover` 同源代理。登录、Cookie 和授权下载仍由源站处理。
+- Worker 内置源站反爬挑战（SHA-1 PoW，`c_token`/`c_time`）求解器与 502/503/504 退避重试，会话 Cookie 在 isolate 内缓存复用；求解失败时挑战页会原样透传给浏览器，由浏览器自行完成挑战。
 - 源站搜索页注入精简工具栏并压缩广告、页脚等非核心区域。
 - 页面出现 `ipfs://`、`/ipfs/<CID>` 或 `data-cid` 时提供 IPFS 网关测速。测速仅访问 `dweb.link`、`ipfs.io` 和 `w3s.link`，每个网关最多读取 64 KiB。
 - 已加入授权列表的 CID 可通过当前 Worker 流式代理下载，支持 `HEAD`、`Range`、`ETag` 和网关故障切换；未授权 CID 只显示网关直连。
+
+### 授权书库 API
+
+- `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。
+- `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径）。
+- `GET /__z/cover?u=<封面URL>` — 封面图代理，仅允许 `covers.z-lib.sk` / `covers.z-library.sk`。
+
+挑战求解平均需要约 6.5 万次 SHA-1（约 50–300 ms CPU），超出免费版 10 ms CPU 限额。[`wrangler.jsonc`](./wrangler.jsonc) 已将 `limits.cpu_ms` 设为 30000（需 Workers 付费版生效）；免费版上求解可能触发限额中断，此时挑战页会回退为透传给浏览器求解，功能不受影响。
 
 ### 授权 IPFS 代理下载
 
@@ -61,7 +70,7 @@ npm install
 npm run dev
 ```
 
-Wrangler 默认在 `http://localhost:8787` 启动本地服务。源站当前可能返回 Cloudflare 验证或 `503`；本项目不会尝试绕过源站验证码、登录或其他访问控制。
+Wrangler 默认在 `http://localhost:8787` 启动本地服务。源站当前可能返回 `503` 反爬挑战页（SHA-1 PoW）；Worker 会尝试在服务端求解，失败时透传给浏览器完成。本项目不会尝试绕过源站验证码、登录或其他访问控制。
 
 ### 前端开发
 
@@ -80,9 +89,9 @@ npm run deploy
 
 ## 限制
 
-- 只代理 `UPSTREAM_ORIGIN`，第三方 CDN、登录域名和跨域跳转不会被代理。
+- 只代理 `UPSTREAM_ORIGIN`（外加白名单封面域名），第三方 CDN、登录域名和跨域跳转不会被代理。
 - HTML 采用流式属性改写；JavaScript 字符串和 CSS 文件内写死的源站地址不会被修改。
+- 挑战求解器依赖源站挑战页的具体格式，源站调整挑战算法后需要同步更新 `src/challenge.js`。
 - IPFS 测速是 Cloudflare 边缘节点到网关的小样本结果，不等同于用户设备完整下载速度；公共网关也没有可用性保证。
 - 代理下载会消耗 Worker 请求时长和出站流量，大文件仍受 Cloudflare 套餐及平台限制影响。
-- Cloudflare Workers 不能保证通过另一个 Cloudflare 站点的 Bot Management 或交互式验证。
 - 部署和使用时应遵守 Cloudflare 条款、源站条款以及所在地适用法律，仅代理你有权访问和传输的内容。

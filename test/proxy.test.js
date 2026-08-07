@@ -107,10 +107,12 @@ test("keeps protocol-relative-looking paths on the configured upstream", () => {
 
 test("forwards requests and rewrites same-origin response headers", async (context) => {
   const originalFetch = globalThis.fetch;
-  let forwardedRequest;
+  let forwardedUrl;
+  let forwardedInit;
 
-  globalThis.fetch = async (request) => {
-    forwardedRequest = request;
+  globalThis.fetch = async (url, init) => {
+    forwardedUrl = url;
+    forwardedInit = init;
     const headers = new Headers({
       Location: "https://z-lib.sk/login?next=%2Fbook%2F1",
     });
@@ -131,11 +133,11 @@ test("forwards requests and rewrites same-origin response headers", async (conte
     { UPSTREAM_ORIGIN: "https://z-lib.sk" },
   );
 
-  assert.equal(forwardedRequest.url, "https://z-lib.sk/book/1?ref=home");
-  assert.equal(forwardedRequest.redirect, "manual");
-  assert.equal(forwardedRequest.headers.get("Origin"), "https://z-lib.sk");
-  assert.equal(forwardedRequest.headers.get("Referer"), "https://z-lib.sk/search?q=worker");
-  assert.equal(forwardedRequest.headers.get("X-Forwarded-Host"), "books.example.com");
+  assert.equal(forwardedUrl, "https://z-lib.sk/book/1?ref=home");
+  assert.equal(forwardedInit.redirect, "manual");
+  assert.equal(forwardedInit.headers.get("Origin"), "https://z-lib.sk");
+  assert.equal(forwardedInit.headers.get("Referer"), "https://z-lib.sk/search?q=worker");
+  assert.equal(forwardedInit.headers.get("X-Forwarded-Host"), "books.example.com");
   assert.equal(response.status, 302);
   assert.equal(response.headers.get("Location"), "https://books.example.com/login?next=%2Fbook%2F1");
   assert.equal(

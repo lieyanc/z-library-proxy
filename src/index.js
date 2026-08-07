@@ -1,4 +1,6 @@
 import { searchOpenCatalogs } from "./catalog.js";
+import { fetchUpstream } from "./challenge.js";
+import { COVER_HOSTS, parseZlibBook, parseZlibSearch } from "./zlib.js";
 import {
   isCidAllowed,
   isValidCid,
@@ -389,6 +391,38 @@ async function handleInternalRequest(request, requestUrl, env) {
     });
   }
 
+  if (requestUrl.pathname === "/__z/api/zsearch") {
+    const query = (requestUrl.searchParams.get("q") || "").trim();
+    if (!query) {
+      return jsonResponse({ error: "Missing search query" }, { status: 400 });
+    }
+    const page = Math.min(Math.max(Number.parseInt(requestUrl.searchParams.get("page") || "1", 10) || 1, 1), 100);
+
+    const results = await searchZlibCatalog(query, page, env);
+    return jsonResponse(results, {
+      headers: { "Cache-Control": "public, max-age=60, stale-while-revalidate=300" },
+    });
+  }
+
+  if (requestUrl.pathname === "/__z/api/zbook") {
+    const bookPath = requestUrl.searchParams.get("path") || "";
+    if (!/^\/book\/[A-Za-z0-9]+\/[A-Za-z0-9._-]*\.html$/.test(bookPath)) {
+      return jsonResponse({ error: "Invalid book path" }, { status: 400 });
+    }
+
+    const book = await fetchZlibBook(bookPath, env);
+    if (!book) {
+      return jsonResponse({ error: "Book page could not be parsed" }, { status: 502 });
+    }
+    return jsonResponse(book, {
+      headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=900" },
+    });
+  }
+
+  if (requestUrl.pathname === "/__z/cover") {
+    return proxyCoverImage(request, requestUrl, env);
+  }
+
   if (requestUrl.pathname === "/__z/api/ipfs-probe") {
     const cid = requestUrl.searchParams.get("cid") || "";
     if (!isValidCid(cid)) {
@@ -417,6 +451,96 @@ async function handleInternalRequest(request, requestUrl, env) {
   }
 
   return new Response("Not Found", { status: 404 });
+}
+
+const ZLIB_FETCH_HEADERS = {
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+};
+
+async function fetchZlibPage(pathAndQuery, env) {
+  const upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
+  const response = await fetchUpstream(`${upstream.origin}${pathAndQuery}`, {
+    headers: ZLIB_FETCH_HEADERS,
+    redirect: "manual",
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) {
+    throw new Error(`Upstream catalog returned ${response.status}`);
+  }
+  return response.text();
+}
+
+async function searchZlibCatalog(query, page, env) {
+  const normalizedQuery = query.trim().slice(0, 200);
+  let results = [];
+  let ok = false;
+  try {
+    const pageSuffix = page > 1 ? `?page=${page}` : "";
+    const html = await fetchZlibPage(`/s/${encodeURIComponent(normalizedQuery)}${pageSuffix}`, env);
+    results = parseZlibSearch(html);
+    ok = true;
+  } catch (error) {
+    console.error("Z-Library search failed", error);
+  }
+
+  return {
+    query: normalizedQuery,
+    page,
+    results,
+    sources: { zlib: { ok, count: results.length } },
+  };
+}
+
+async function fetchZlibBook(bookPath, env) {
+  try {
+    const html = await fetchZlibPage(bookPath, env);
+    return parseZlibBook(html, bookPath);
+  } catch (error) {
+    console.error("Z-Library book fetch failed", error);
+    return null;
+  }
+}
+
+async function proxyCoverImage(request, requestUrl, env) {
+  const target = requestUrl.searchParams.get("u") || "";
+  let url;
+  try {
+    url = new URL(target);
+  } catch {
+    return new Response("Invalid cover URL", { status: 400 });
+  }
+  if (url.protocol !== "https:" || !COVER_HOSTS.has(url.hostname)) {
+    return new Response("Cover host is not allowed", { status: 403 });
+  }
+
+  let upstreamResponse;
+  try {
+    upstreamResponse = await fetchUpstream(url.toString(), {
+      method: request.method,
+      headers: { Accept: "image/avif,image/webp,image/*,*/*;q=0.8" },
+      redirect: "manual",
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    return new Response("Bad Gateway", { status: 502 });
+  }
+
+  const contentType = upstreamResponse.headers.get("Content-Type") || "";
+  if (!upstreamResponse.ok || !contentType.toLowerCase().startsWith("image/")) {
+    return new Response("Cover not found", { status: upstreamResponse.ok ? 404 : upstreamResponse.status });
+  }
+
+  const headers = new Headers();
+  headers.set("Content-Type", contentType);
+  headers.set("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+  headers.set("X-Content-Type-Options", "nosniff");
+  return new Response(request.method === "HEAD" ? null : upstreamResponse.body, {
+    status: 200,
+    headers,
+  });
 }
 
 function handleHomeRequest(request, requestUrl) {
@@ -452,15 +576,20 @@ async function proxyRequest(request, env) {
   const headers = new Headers(request.headers);
   rewriteRequestHeaders(headers, requestUrl, upstream);
 
-  const requestWithUpstreamUrl = new Request(upstreamUrl, request);
-  const upstreamRequest = new Request(requestWithUpstreamUrl, {
-    headers,
-    redirect: "manual",
-  });
+  // Buffer the body so the resilient fetcher may retry the request.
+  const body =
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : await request.arrayBuffer();
 
   let upstreamResponse;
   try {
-    upstreamResponse = await fetch(upstreamRequest);
+    upstreamResponse = await fetchUpstream(upstreamUrl.toString(), {
+      method: request.method,
+      headers,
+      body,
+      redirect: "manual",
+    });
   } catch (error) {
     console.error("Upstream request failed", error);
     return new Response("Bad Gateway", { status: 502 });
