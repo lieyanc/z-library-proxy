@@ -98,12 +98,15 @@ function IpfsRow({ cid, filename }: { cid: string; filename: string }) {
       {probe && (
         <div className="flex flex-col gap-1.5">
           {probe.gateways.map((gateway) => (
-            <div key={gateway.id} className="flex items-center justify-between gap-2 text-xs">
+            <div
+              key={gateway.id}
+              className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 text-xs"
+            >
               <span className="font-medium">{gateway.label}</span>
               <span className="text-muted-foreground">
                 {gateway.ok ? `${gateway.latencyMs} ms · ${gateway.kibPerSecond} KiB/s` : "测速超时"}
               </span>
-              <span className="flex gap-1.5">
+              <span className="ml-auto flex gap-1.5">
                 {gateway.proxyUrl && (
                   <Button
                     size="sm"
@@ -194,8 +197,10 @@ export function BookDetailDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{book?.title ?? "书籍详情"}</DialogTitle>
-          <DialogDescription>{book?.authors.join("、") || "作者未知"}</DialogDescription>
+          <DialogTitle className="wrap-break-word">{book?.title ?? "书籍详情"}</DialogTitle>
+          <DialogDescription className="wrap-break-word">
+            {book?.authors.join("、") || "作者未知"}
+          </DialogDescription>
         </DialogHeader>
 
         {state.status === "loading" && (
@@ -231,14 +236,20 @@ export function BookDetailDialog({
                   )}
                   {detail.filesize && <Badge variant="outline">{detail.filesize}</Badge>}
                   {detail.rating && <Badge variant="outline">★ {detail.rating}</Badge>}
-                  {detail.publisher && <Badge variant="outline">{detail.publisher}</Badge>}
+                  {detail.publisher && (
+                    <Badge variant="outline" className="max-w-full">
+                      <span className="truncate">{detail.publisher}</span>
+                    </Badge>
+                  )}
                 </div>
                 {detail.downloadPath && (
                   <div>
                     <div className="flex items-center">
                       <Button
                         size="sm"
-                        className={detailBookId ? "rounded-r-none" : undefined}
+                        className={
+                          detailBookId ? "min-w-0 max-w-full rounded-r-none" : "min-w-0 max-w-full"
+                        }
                         render={
                           <a
                             href={
@@ -255,7 +266,9 @@ export function BookDetailDialog({
                         }
                       >
                         <DownloadIcon data-icon="inline-start" />
-                        下载{detail.downloadLabel ? `（${detail.downloadLabel}）` : ""}
+                        <span className="truncate">
+                          下载{detail.downloadLabel ? `（${detail.downloadLabel}）` : ""}
+                        </span>
                       </Button>
                       {detailBookId && (
                         <DropdownMenu>
@@ -340,7 +353,7 @@ export function BookDetailDialog({
             {detail.description && (
               <>
                 <Separator />
-                <p className="text-sm leading-relaxed text-muted-foreground">
+                <p className="text-sm leading-relaxed wrap-break-word text-muted-foreground">
                   {detail.description}
                 </p>
               </>
@@ -353,7 +366,7 @@ export function BookDetailDialog({
                   {detail.properties.map((property) => (
                     <div key={property.key} className="contents">
                       <dt className="whitespace-nowrap text-muted-foreground">{property.label}</dt>
-                      <dd className="min-w-0">{property.value}</dd>
+                      <dd className="min-w-0 wrap-break-word">{property.value}</dd>
                     </div>
                   ))}
                 </dl>
