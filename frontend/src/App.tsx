@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog"
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -49,12 +50,25 @@ type SearchState =
   | { status: "done"; mode: Mode; payload: SearchPayload | ZlibSearchPayload }
   | { status: "error"; mode: Mode }
 
+// True when the worker answered but the upstream Z-Library fetch failed
+// (transient 5xx after its internal retries) — the source badge reports
+// ok: false and results is empty, which must not look like "no matches".
+function zlibSourceFailed(state: SearchState): boolean {
+  return (
+    state.status === "done" &&
+    state.mode === "source" &&
+    !(state.payload as ZlibSearchPayload).sources.zlib.ok
+  )
+}
+
 function statusText(state: SearchState, verifying: boolean): string {
   switch (state.status) {
     case "loading":
       return verifying ? "正在通过人机验证…" : "搜索中…"
     case "done":
-      return `${state.payload.results.length} 项结果`
+      return zlibSourceFailed(state)
+        ? "搜索暂不可用"
+        : `${state.payload.results.length} 项结果`
     case "error":
       return "搜索暂不可用"
     default:
@@ -88,10 +102,12 @@ function EmptyState({
   icon: Icon,
   title,
   description,
+  action,
 }: {
   icon: typeof BookOpenIcon
   title: string
   description: string
+  action?: React.ReactNode
 }) {
   return (
     <Empty className="border">
@@ -102,6 +118,7 @@ function EmptyState({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
+      {action && <EmptyContent>{action}</EmptyContent>}
     </Empty>
   )
 }
@@ -165,6 +182,12 @@ export default function App({
 
   const loading = state.status === "loading"
   const results = state.status === "done" ? state.payload.results : []
+  const zlibFailed = zlibSourceFailed(state)
+  const retrySearch = () => {
+    if (state.status === "error" || state.status === "done") {
+      void runSearch(query, state.mode)
+    }
+  }
 
   return (
     <div className="flex min-h-svh flex-col">
@@ -306,6 +329,7 @@ export default function App({
               </div>
             )}
             {state.status === "done" &&
+              !zlibFailed &&
               (results.length > 0 ? (
                 <ol className="flex flex-col gap-4">
                   {results.map((book) => (
@@ -324,14 +348,19 @@ export default function App({
                   description="换个关键词试试"
                 />
               ))}
-            {state.status === "error" && (
+            {(state.status === "error" || zlibFailed) && (
               <EmptyState
                 icon={SearchXIcon}
                 title="搜索暂不可用"
                 description={
                   state.mode === "source"
-                    ? "Z-Library 服务暂时不可用，请稍后再试"
-                    : "开放资源服务暂时不可用，请稍后再试"
+                    ? "Z-Library 服务暂时不可用，请稍后重试"
+                    : "开放资源服务暂时不可用，请稍后重试"
+                }
+                action={
+                  <Button variant="outline" onClick={retrySearch}>
+                    重试
+                  </Button>
                 }
               />
             )}
