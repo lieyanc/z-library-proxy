@@ -25,9 +25,22 @@ test("serves the minimal search home without contacting the upstream", async () 
 
   assert.equal(response.status, 200);
   assert.match(response.headers.get("Content-Security-Policy"), /script-src 'self'/);
-  assert.match(html, /<div id="root" data-query="alice" data-upstream="z-lib\.sk"><\/div>/);
+  assert.match(html, /<div id="root" data-query="alice" data-upstream="z-lib\.sk" data-commit="[a-z0-9]+"><\/div>/);
   assert.match(html, /\/__z\/assets\/app\.js/);
   assert.match(html, /\/__z\/assets\/app\.css/);
+});
+
+test("serves the build version for deploy detection", async () => {
+  const response = await worker.fetch(
+    new Request("https://books.example.com/__z/api/version"),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  const payload = await response.json();
+  assert.match(payload.version, /^[0-9a-f]{12}$/);
+  assert.match(payload.commit, /^[0-9a-f]+$|^unknown$/);
 });
 
 test("keeps the theme init script in sync with its CSP hash", async () => {

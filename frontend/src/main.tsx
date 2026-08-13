@@ -11,6 +11,7 @@ createRoot(root).render(
     <App
       initialQuery={root.dataset.query ?? ""}
       upstreamHost={root.dataset.upstream ?? ""}
+      buildCommit={root.dataset.commit ?? ""}
     />
   </StrictMode>,
 )

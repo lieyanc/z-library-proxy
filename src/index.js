@@ -11,6 +11,8 @@ import {
 import {
   APP_CSS,
   APP_JS,
+  ASSETS_VERSION,
+  BUILD_COMMIT,
   PATCH_CSS,
   PATCH_JS,
   renderHomePage,
@@ -384,8 +386,15 @@ async function handleInternalRequest(request, requestUrl, env) {
     return methodNotAllowed("GET");
   }
 
-  if (requestUrl.pathname === "/__z/api/search") {
-    const query = (requestUrl.searchParams.get("q") || "").trim();
+  if (requestUrl.pathname === "/__z/api/version") {
+    // Open tabs poll this to detect deploys and reload onto fresh assets.
+    return jsonResponse(
+      { version: ASSETS_VERSION, commit: BUILD_COMMIT },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  if (requestUrl.pathname === "/__z/api/search") {    const query = (requestUrl.searchParams.get("q") || "").trim();
     if (!query) {
       return jsonResponse({ error: "Missing search query" }, { status: 400 });
     }

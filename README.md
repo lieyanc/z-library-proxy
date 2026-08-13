@@ -10,10 +10,12 @@
 - 源站反爬挑战（SHA-1 PoW）由浏览器本地求解：Worker 遇到挑战时把挑战参数连同该次响应签发的 `bsrv` 粘性 Cookie 一起以 JSON 下发（503 + `challenge`），前端求解后经 `POST /__z/api/challenge` 回传 token 与 `bsrv`（源站只接受与同次 503 配对的 `bsrv` + `c_token`），Worker 以 `Set-Cookie` 把配对好的会话种在浏览器侧，后续 API 请求自动携带并转发上游——Worker 本身无状态，不受 isolate 切换影响；全程自动，前端显示“正在通过人机验证…”。Worker 也内置了 WebCrypto 求解器作为代理页面流的兜底，并对 502/503/504 做退避重试。
 - 源站搜索页注入精简工具栏并压缩广告、页脚等非核心区域。
 - 页面出现 `ipfs://`、`/ipfs/<CID>` 或 `data-cid` 时提供 IPFS 网关测速。测速仅访问 `dweb.link`、`ipfs.io` 和 `w3s.link`，每个网关最多读取 64 KiB。
+- 部署感知自刷新：构建时把当前 git commit 注入 `src/assets.generated.js`，首页 HTML（`no-store`）经 `data-commit` 下发，前端轮询 `/__z/api/version`，发现 commit 变化即自动 `location.reload()`；静态资源 URL 带内容哈希 `?v=`，标题栏仓库名旁显示 `@<commit>` 链接。
 - 已授权的 CID 可通过当前 Worker 流式代理下载，支持 `HEAD`、`Range`、`ETag` 和网关故障切换；未授权 CID 只显示网关直连。
 
 ### 内置 API
 
+- `GET /__z/api/version` — 当前构建的版本信息（`{version, commit}`，`no-store`），供前端检测部署。
 - `GET /__z/api/search?q=<关键词>` — 开放资源搜索（Project Gutenberg + Open Library，JSON）。
 - `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。源站挑战时返回 `503 + {challenge}`。
 - `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径、数字书籍 ID、是否已配置下载账户）。挑战时同样返回 `503 + {challenge}`。

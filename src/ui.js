@@ -1,8 +1,8 @@
 // The home page frontend is a React + shadcn/ui app built from frontend/.
 // Its bundles are embedded by scripts/generate-assets.mjs into this module.
-import { APP_CSS, APP_JS, ASSETS_VERSION } from "./assets.generated.js";
+import { APP_CSS, APP_JS, ASSETS_VERSION, BUILD_COMMIT } from "./assets.generated.js";
 
-export { APP_CSS, APP_JS };
+export { APP_CSS, APP_JS, ASSETS_VERSION, BUILD_COMMIT };
 
 // Applies the persisted theme before the React bundle loads to avoid a flash
 // of the wrong color scheme. Keep byte-for-byte in sync with frontend/index.html
@@ -36,7 +36,7 @@ export function renderHomePage(query = "", upstreamHost = "") {
   <script>${THEME_INIT_SCRIPT}</script>
 </head>
 <body>
-  <div id="root" data-query="${safeQuery}" data-upstream="${safeUpstreamHost}"></div>
+  <div id="root" data-query="${safeQuery}" data-upstream="${safeUpstreamHost}" data-commit="${escapeHtml(BUILD_COMMIT)}"></div>
   <script type="module" src="/__z/assets/app.js?v=${ASSETS_VERSION}"></script>
 </body>
 </html>`;

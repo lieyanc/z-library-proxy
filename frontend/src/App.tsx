@@ -125,12 +125,51 @@ function EmptyState({
 
 const GITHUB_REPO_URL = "https://github.com/lieyanc/z-library-proxy"
 
+// Polls the worker's build version and reloads the tab when a deploy lands,
+// so long-lived tabs never keep running a stale bundle. The HTML itself is
+// no-store and asset URLs carry a content hash, so a reload always fetches
+// the newest build.
+function useDeployReload(buildCommit: string) {
+  useEffect(() => {
+    if (!buildCommit || buildCommit === "unknown") return
+    let reloaded = false
+    const check = async () => {
+      if (reloaded) return
+      try {
+        const response = await fetch("/__z/api/version", {
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        })
+        if (!response.ok) return
+        const payload = (await response.json()) as { commit?: string }
+        if (payload.commit && payload.commit !== "unknown" && payload.commit !== buildCommit) {
+          reloaded = true
+          location.reload()
+        }
+      } catch {
+        // Offline or transient failure — try again on the next trigger.
+      }
+    }
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void check()
+    }
+    const timer = setInterval(check, 10 * 60 * 1000)
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
+  }, [buildCommit])
+}
+
 export default function App({
   initialQuery,
   upstreamHost,
+  buildCommit = "",
 }: {
   initialQuery: string
   upstreamHost: string
+  buildCommit?: string
 }) {
   const [mode, setMode] = useState<Mode>("source")
   const [query, setQuery] = useState(initialQuery)
@@ -188,20 +227,34 @@ export default function App({
       void runSearch(query, state.mode)
     }
   }
+  const showCommit = buildCommit !== "" && buildCommit !== "unknown"
+  useDeployReload(buildCommit)
 
   return (
     <div className="flex min-h-svh flex-col">
       <header className="border-b">
         <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between px-4">
-          <a
-            href={GITHUB_REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 text-lg font-bold tracking-tight"
-          >
-            <GithubIcon className="size-5" />
-            lieyanc/z-library-proxy
-          </a>
+          <div className="flex items-center gap-2">
+            <a
+              href={GITHUB_REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 text-lg font-bold tracking-tight"
+            >
+              <GithubIcon className="size-5" />
+              lieyanc/z-library-proxy
+            </a>
+            {showCommit && (
+              <a
+                href={`${GITHUB_REPO_URL}/commit/${buildCommit}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-xs text-muted-foreground hover:text-foreground"
+              >
+                @{buildCommit}
+              </a>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
