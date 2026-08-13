@@ -17,7 +17,7 @@
 
 - `GET /__z/api/version` — 当前构建的版本信息（`{version, commit}`，`no-store`），供前端检测部署。
 - `GET /__z/api/search?q=<关键词>` — 开放资源搜索（Project Gutenberg + Open Library，JSON）。
-- `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。源站挑战时返回 `503 + {challenge}`。
+- `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。源站挑战时返回 `503 + {challenge}`。成功结果写入 Cache API 缓存 5 分钟、同关键词的并发请求合并为一次上游抓取（热门词和重复点击不再消耗上游限流额度）；失败与挑战结果一律不缓存。
 - `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径、数字书籍 ID、是否已配置下载账户）。挑战时同样返回 `503 + {challenge}`。
 - `GET /__z/api/zformats?id=<数字书籍ID>` — 同一本书的其他可选格式（转发上游 `/papi/book/<id>/formats`），每项含扩展名、文件大小和 `/dl/<hash>` 下载路径，下载仍走 `/__z/dl/` 中转。挑战时同样返回 `503 + {challenge}`。
 - `POST /__z/api/challenge` — 提交浏览器求解的 `{token, seconds, bsrv}`，校验后以 `Set-Cookie` 种入浏览器持有的上游会话（`z_zlib_session`，HttpOnly）。

@@ -324,6 +324,23 @@ function buildIpfsProxyUrl(cid, path, filename, gatewayId) {
   return `/__z/ipfs/${cid}?${searchParams}`;
 }
 
+// In-flight upstream searches, keyed by the canonical cache key, so
+// concurrent identical searches share one upstream fetch instead of
+// multiplying the request rate the upstream rate-limiter sees.
+const inflightZSearchRequests = new Map();
+
+function inflightZSearch(key, task) {
+  const existing = inflightZSearchRequests.get(key);
+  if (existing) {
+    return existing;
+  }
+  const promise = task().finally(() => {
+    inflightZSearchRequests.delete(key);
+  });
+  inflightZSearchRequests.set(key, promise);
+  return promise;
+}
+
 async function handleInternalRequest(request, requestUrl, env) {
   if (requestUrl.pathname === "/__z/api/challenge") {
     return handleChallengeSubmission(request, env);
@@ -411,24 +428,44 @@ async function handleInternalRequest(request, requestUrl, env) {
       return jsonResponse({ error: "Missing search query" }, { status: 400 });
     }
     const page = Math.min(Math.max(Number.parseInt(requestUrl.searchParams.get("page") || "1", 10) || 1, 1), 100);
+    const cacheKey = `https://zlib-cache.local/v${ASSETS_VERSION}/__z/api/zsearch?q=${encodeURIComponent(query)}&page=${page}`;
+    const cache = globalThis.caches?.default ?? null;
 
-    const results = await searchZlibCatalog(query, page, env, readZlibSession(request));
+    // Serve a previously cached success without touching upstream — repeated
+    // or popular queries stop consuming upstream rate-limit budget entirely.
+    // Failures and challenges are never written to the cache.
+    if (cache) {
+      const cached = await cache.match(cacheKey);
+      if (cached) {
+        return cached;
+      }
+    }
+
+    // Merge concurrent identical searches into one upstream fetch.
+    const results = await inflightZSearch(cacheKey, () =>
+      searchZlibCatalog(query, page, env, readZlibSession(request)),
+    );
     if (results.challenge) {
       return jsonResponse(results, {
         status: 503,
         headers: { "Cache-Control": "no-store" },
       });
     }
-    return jsonResponse(results, {
+    const response = jsonResponse(results, {
       headers: {
-        // Upstream failures (ok: false) must not be cached at the edge:
+        // Upstream failures (ok: false) must not be cached anywhere:
         // serving a cached failure would turn the next retry into an
-        // instant, unrecoverable "搜索暂不可用".
+        // instant, unrecoverable "搜索暂不可用". Successes are cached
+        // both at the edge and in the Cache API (max-age=300).
         "Cache-Control": results.sources.zlib.ok
-          ? "public, max-age=60, stale-while-revalidate=300"
+          ? "public, max-age=300, s-maxage=300, stale-while-revalidate=900"
           : "no-store",
       },
     });
+    if (cache && results.sources.zlib.ok) {
+      await cache.put(cacheKey, response.clone());
+    }
+    return response;
   }
 
   if (requestUrl.pathname === "/__z/api/zbook") {

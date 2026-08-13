@@ -435,7 +435,98 @@ test("zsearch recovers when the upstream rate limit clears on a later attempt", 
   assert.equal(payload.sources.zlib.rateLimited, false);
   assert.equal(payload.results.length, 1);
   assert.equal(calls, 3);
-  assert.equal(response.headers.get("Cache-Control"), "public, max-age=60, stale-while-revalidate=300");
+  assert.equal(response.headers.get("Cache-Control"), "public, max-age=300, s-maxage=300, stale-while-revalidate=900");
+});
+
+test("zsearch successes are cached and served without touching upstream again", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  const store = new Map();
+  globalThis.caches = {
+    default: {
+      async match(key) {
+        const entry = store.get(String(key));
+        return entry ? entry.clone() : undefined;
+      },
+      async put(key, value) {
+        store.set(String(key), value.clone());
+      },
+    },
+  };
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(
+      '<z-bookcard id="1" href="/book/1/t.html"><div slot="title">A Book</div></z-bookcard>',
+      { status: 200, headers: { "Content-Type": "text/html" } },
+    );
+  };
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+    if (originalCaches === undefined) {
+      delete globalThis.caches;
+    } else {
+      globalThis.caches = originalCaches;
+    }
+  });
+
+  const url = "https://books.example.com/__z/api/zsearch?q=test";
+  const first = await worker.fetch(new Request(url), { UPSTREAM_ORIGIN: "https://z-lib.sk" });
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).results.length, 1);
+  assert.equal(calls, 1);
+
+  const second = await worker.fetch(new Request(url), { UPSTREAM_ORIGIN: "https://z-lib.sk" });
+  assert.equal(second.status, 200);
+  assert.equal((await second.json()).results.length, 1);
+  assert.equal(calls, 1, "the second request must be served from the cache");
+
+  // Failures are not written to the cache: a new failing request must still
+  // hit upstream on every call.
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response("rate limited", {
+      status: 429,
+      headers: { "Content-Type": "text/html" },
+    });
+  };
+  const failing = await worker.fetch(
+    new Request("https://books.example.com/__z/api/zsearch?q=other"),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+  assert.equal((await failing.json()).sources.zlib.ok, false);
+  assert.ok(calls > 2, "the failing search must not be served from the cache");
+});
+
+test("concurrent identical zsearches share one upstream fetch", async (context) => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  globalThis.fetch = async () => {
+    calls += 1;
+    await gate;
+    return new Response(
+      '<z-bookcard id="1" href="/book/1/t.html"><div slot="title">A Book</div></z-bookcard>',
+      { status: 200, headers: { "Content-Type": "text/html" } },
+    );
+  };
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const url = "https://books.example.com/__z/api/zsearch?q=test";
+  const first = worker.fetch(new Request(url), { UPSTREAM_ORIGIN: "https://z-lib.sk" });
+  const second = worker.fetch(new Request(url), { UPSTREAM_ORIGIN: "https://z-lib.sk" });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  release();
+  const [a, b] = await Promise.all([first, second]);
+
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  assert.equal(calls, 1);
 });
 
 test("account download requires configuration", async () => {

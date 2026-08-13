@@ -20,7 +20,9 @@ const SESSION_TTL_MS = 30 * 60 * 1000;
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const MAX_ATTEMPTS = 4;
 const MAX_SOLVES_PER_REQUEST = 2;
-const RETRY_BACKOFF_MS = [250, 800, 2000];
+// Longer backoffs give the upstream rate-limit window (429) more time to
+// cool down and let later attempts sample different egress IPs.
+const RETRY_BACKOFF_MS = [500, 1500, 4000];
 // Longest a single attempt may run when the caller set a total budget
 // (timeoutMs): a hung upstream must not consume the whole budget before the
 // retry loop gets a chance to try another egress.
