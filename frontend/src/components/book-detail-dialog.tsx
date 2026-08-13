@@ -151,17 +151,21 @@ export function BookDetailDialog({
 }) {
   const [state, setState] = useState<DetailState>({ status: "loading" })
   const [formatsState, setFormatsState] = useState<FormatsState>({ status: "idle" })
+  const [verifying, setVerifying] = useState(false)
 
   useEffect(() => {
     if (!open || !book?.bookPath) return
     setState({ status: "loading" })
     let cancelled = false
-    fetchZlibBook(book.bookPath)
+    fetchZlibBook(book.bookPath, setVerifying)
       .then((detail) => {
         if (!cancelled) setState({ status: "done", detail })
       })
       .catch(() => {
         if (!cancelled) setState({ status: "error" })
+      })
+      .finally(() => {
+        if (!cancelled) setVerifying(false)
       })
     return () => {
       cancelled = true
@@ -204,14 +208,20 @@ export function BookDetailDialog({
         </DialogHeader>
 
         {state.status === "loading" && (
-          <div className="flex gap-4">
-            <Skeleton className="aspect-[9/13] w-24 rounded-md" />
-            <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-              <Skeleton className="h-4 w-2/3" />
-              <Skeleton className="h-4 w-1/3" />
-              <Skeleton className="h-4 w-1/2" />
-              <Skeleton className="h-16 w-full" />
+          <div className="flex flex-col gap-3">
+            <div className="flex gap-4">
+              <Skeleton className="aspect-[9/13] w-24 rounded-md" />
+              <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="h-4 w-1/2" />
+                <Skeleton className="h-16 w-full" />
+              </div>
             </div>
+            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Spinner className="size-3.5" />
+              {verifying ? "正在通过人机验证…" : "正在加载详情…"}
+            </p>
           </div>
         )}
 

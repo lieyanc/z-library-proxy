@@ -71,6 +71,16 @@ export interface CatalogSource {
   rateLimited?: boolean
 }
 
+// Thrown when every challenge round was solved but the API still answers
+// 503 — the upstream keeps rejecting the session (egress churn / temporary
+// block). The UI shows a dedicated prompt instead of a generic failure.
+export class ChallengeFailedError extends Error {
+  constructor() {
+    super("Upstream challenge rounds exhausted")
+    this.name = "ChallengeFailedError"
+  }
+}
+
 export interface SearchPayload {
   query: string
   results: Book[]
@@ -137,13 +147,17 @@ export async function searchBooks(query: string): Promise<SearchPayload> {
 // Fetches a JSON API that may answer with a delegated PoW challenge
 // (503 + challenge payload). Solves it locally, submits the token to the
 // worker, and retries. `onVerifying` fires while a solve is in progress.
+// The worker already tries to solve upstream challenges itself (several
+// in-flight attempts per round), so a challenge reaching the browser is a
+// rare leftover — a handful of rounds with a short cooldown converges in
+// practice even when the upstream rejects the first retries.
 async function fetchWithChallenge<T>(
   url: string,
   onVerifying?: (verifying: boolean) => void,
 ): Promise<T> {
   let response = await fetch(url, { headers: { Accept: "application/json" } })
 
-  for (let attempt = 0; attempt < 3 && response.status === 503; attempt += 1) {
+  for (let attempt = 0; attempt < 4 && response.status === 503; attempt += 1) {
     const payload = await response.json().catch(() => null)
     const challenge = payload?.challenge as Challenge | undefined
     if (!challenge) break
@@ -161,9 +175,14 @@ async function fetchWithChallenge<T>(
     }
     if (!solved) break
 
+    // Give the upstream a beat before retrying with the fresh pair.
+    await new Promise((resolve) => setTimeout(resolve, 250))
     response = await fetch(url, { headers: { Accept: "application/json" } })
   }
 
+  if (response.status === 503) {
+    throw new ChallengeFailedError()
+  }
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`)
   }

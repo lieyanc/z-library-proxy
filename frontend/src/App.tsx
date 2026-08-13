@@ -40,7 +40,7 @@ import type {
   SearchPayload,
   ZlibSearchPayload,
 } from "@/lib/search"
-import { searchBooks, searchZlib, sourceSearchUrl } from "@/lib/search"
+import { searchBooks, searchZlib, sourceSearchUrl, ChallengeFailedError } from "@/lib/search"
 
 type Mode = "open" | "source"
 
@@ -48,7 +48,7 @@ type SearchState =
   | { status: "idle" }
   | { status: "loading"; mode: Mode }
   | { status: "done"; mode: Mode; payload: SearchPayload | ZlibSearchPayload }
-  | { status: "error"; mode: Mode }
+  | { status: "error"; mode: Mode; challengeFailed: boolean }
 
 // True when the worker answered but the upstream Z-Library fetch failed
 // (transient 5xx after its internal retries) — the source badge reports
@@ -71,18 +71,24 @@ function zlibRateLimited(state: SearchState): boolean {
   )
 }
 
-function statusText(state: SearchState, verifying: boolean): string {
+function statusText(state: SearchState, verifying: boolean, loadTick: number): string {
   switch (state.status) {
     case "loading":
-      return verifying ? "正在通过人机验证…" : "搜索中…"
+      // The worker solves upstream challenges and retries 429/5xx on its
+      // own, so a cold search can sit in "searching" for several seconds —
+      // progress the text with elapsed time instead of looking stuck.
+      if (verifying) return "正在通过人机验证…"
+      if (loadTick >= 8) return "仍在等待源站响应…"
+      if (loadTick >= 3) return "源站响应较慢，正在重试…"
+      return "搜索中…"
     case "done":
       return zlibSourceFailed(state)
         ? zlibRateLimited(state)
           ? "源站限流"
           : "搜索暂不可用"
-        : `${state.payload.results.length} 项结果`
+        : `共 ${state.payload.results.length} 项结果`
     case "error":
-      return "搜索暂不可用"
+      return state.challengeFailed ? "人机验证未通过" : "搜索暂不可用"
     default:
       return ""
   }
@@ -203,8 +209,12 @@ export default function App({
           ? await searchZlib(trimmed, 1, setVerifying)
           : await searchBooks(trimmed)
       setState({ status: "done", mode: searchMode, payload })
-    } catch {
-      setState({ status: "error", mode: searchMode })
+    } catch (error) {
+      setState({
+        status: "error",
+        mode: searchMode,
+        challengeFailed: error instanceof ChallengeFailedError,
+      })
     } finally {
       setVerifying(false)
     }
@@ -234,6 +244,19 @@ export default function App({
   const loading = state.status === "loading"
   const results = state.status === "done" ? state.payload.results : []
   const zlibFailed = zlibSourceFailed(state)
+  const challengeFailed = state.status === "error" && state.challengeFailed
+
+  // Seconds since the current search started; drives the phased loading
+  // status ("搜索中…" → "正在重试…" → "仍在等待…") while the worker
+  // handles upstream challenges and retries server-side.
+  const [loadTick, setLoadTick] = useState(0)
+  useEffect(() => {
+    if (!loading) return
+    setLoadTick(0)
+    const timer = setInterval(() => setLoadTick((tick) => tick + 1), 1000)
+    return () => clearInterval(timer)
+  }, [loading])
+
   const retrySearch = () => {
     if (state.status === "error" || state.status === "done") {
       void runSearch(query, state.mode)
@@ -362,7 +385,10 @@ export default function App({
               <h2 className="text-lg font-semibold">
                 {state.mode === "source" ? "Z-Library" : "开放资源"}
               </h2>
-              <p className="text-sm text-muted-foreground">{statusText(state, verifying)}</p>
+              <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                {(loading || verifying) && <Spinner className="size-3.5" />}
+                {statusText(state, verifying, loadTick)}
+              </p>
             </div>
             <Separator />
             {state.status === "done" && (
@@ -416,13 +442,21 @@ export default function App({
             {(state.status === "error" || zlibFailed) && (
               <EmptyState
                 icon={SearchXIcon}
-                title={zlibRateLimited(state) ? "源站限流" : "搜索暂不可用"}
+                title={
+                  challengeFailed
+                    ? "人机验证未通过"
+                    : zlibRateLimited(state)
+                      ? "源站限流"
+                      : "搜索暂不可用"
+                }
                 description={
-                  zlibRateLimited(state)
-                    ? "Z-Library 源站暂时限制了访问频率，请稍等片刻再重试"
-                    : state.mode === "source"
-                      ? "Z-Library 服务暂时不可用，请稍后重试"
-                      : "开放资源服务暂时不可用，请稍后重试"
+                  challengeFailed
+                    ? "已多次尝试通过源站的人机验证，源站仍拒绝了请求，通常意味着当前网络出口被临时限制，请稍等片刻再重试"
+                    : zlibRateLimited(state)
+                      ? "Z-Library 源站暂时限制了访问频率，请稍等片刻再重试"
+                      : state.mode === "source"
+                        ? "Z-Library 服务暂时不可用，请稍后重试"
+                        : "开放资源服务暂时不可用，请稍后重试"
                 }
                 action={
                   <Button variant="outline" onClick={retrySearch}>
