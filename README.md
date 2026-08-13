@@ -7,7 +7,7 @@
 - `/` 使用精简搜索首页，不加载源站首页的其他模块。
 - 开放资源搜索同时接入 Project Gutenberg 和 Open Library。Gutenberg 结果强制要求 `copyright=false`，Open Library 结果强制要求 `ebook_access=public` 和 `public_scan_b=true`。
 - Z-Library（授权书库）为默认搜索模式，不跳转源站页面：Worker 在服务端抓取并解析源站结果页（`<z-bookcard>`），以自有界面渲染；点击结果弹出书籍详情对话框（元数据、简介、下载入口、IPFS 网关测速），封面经 `/__z/cover` 同源代理。登录、Cookie 和授权下载仍由源站处理。搜索词非空时再次点击已选中的“Z-Library”切换钮，可选择跳转到 `/s/<关键词>` 以源站原始样式渲染。
-- 源站反爬挑战（SHA-1 PoW）由浏览器本地求解：Worker 遇到挑战时把挑战参数以 JSON 下发（503 + `challenge`），前端求解后经 `POST /__z/api/challenge` 回传 token，Worker 存入 isolate 级会话 jar 并重放原请求；全程自动，前端显示“正在通过人机验证…”。Worker 也内置了 WebCrypto 求解器作为代理页面流的兜底，并对 502/503/504 做退避重试。
+- 源站反爬挑战（SHA-1 PoW）由浏览器本地求解：Worker 遇到挑战时把挑战参数连同该次响应签发的 `bsrv` 粘性 Cookie 一起以 JSON 下发（503 + `challenge`），前端求解后经 `POST /__z/api/challenge` 回传 token 与 `bsrv`（源站只接受与同次 503 配对的 `bsrv` + `c_token`），Worker 以 `Set-Cookie` 把配对好的会话种在浏览器侧，后续 API 请求自动携带并转发上游——Worker 本身无状态，不受 isolate 切换影响；全程自动，前端显示“正在通过人机验证…”。Worker 也内置了 WebCrypto 求解器作为代理页面流的兜底，并对 502/503/504 做退避重试。
 - 源站搜索页注入精简工具栏并压缩广告、页脚等非核心区域。
 - 页面出现 `ipfs://`、`/ipfs/<CID>` 或 `data-cid` 时提供 IPFS 网关测速。测速仅访问 `dweb.link`、`ipfs.io` 和 `w3s.link`，每个网关最多读取 64 KiB。
 - 已授权的 CID 可通过当前 Worker 流式代理下载，支持 `HEAD`、`Range`、`ETag` 和网关故障切换；未授权 CID 只显示网关直连。
@@ -18,7 +18,7 @@
 - `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。源站挑战时返回 `503 + {challenge}`。
 - `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径、数字书籍 ID、是否已配置下载账户）。挑战时同样返回 `503 + {challenge}`。
 - `GET /__z/api/zformats?id=<数字书籍ID>` — 同一本书的其他可选格式（转发上游 `/papi/book/<id>/formats`），每项含扩展名、文件大小和 `/dl/<hash>` 下载路径，下载仍走 `/__z/dl/` 中转。挑战时同样返回 `503 + {challenge}`。
-- `POST /__z/api/challenge` — 提交浏览器求解的 `{token, seconds}`，存入上游会话 jar。
+- `POST /__z/api/challenge` — 提交浏览器求解的 `{token, seconds, bsrv}`，校验后以 `Set-Cookie` 种入浏览器持有的上游会话（`z_zlib_session`，HttpOnly）。
 - `GET /__z/cover?u=<封面URL>` — 封面图代理，仅允许 `covers.z-lib.sk` / `covers.z-library.sk`。
 - `GET /__z/api/ipfs-probe?cid=<CID>&path=<可选路径>&filename=<可选文件名>` — IPFS 网关测速（JSON），返回各网关延迟、样本速度，以及 CID 已授权时的 `/__z/ipfs/` 代理下载地址。
 - `GET /__z/dl/<hash>` — 账户下载中转：用已配置的账户会话解析 `/dl/<hash>` 的 302 签名 CDN 地址并流式回传文件（支持断点续传式开放 Range），未配置账户时返回 501。

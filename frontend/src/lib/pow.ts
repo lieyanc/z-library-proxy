@@ -1,18 +1,22 @@
 // Browser-side solver for the upstream SHA-1 proof-of-work challenge.
 // The worker delegates the challenge to the browser (503 + challenge JSON),
-// the browser solves it here and POSTs the token back to the worker, which
-// stores it in the upstream session jar. Mirrors src/challenge.js.
+// the browser solves it here and POSTs the token back to the worker together
+// with the bsrv stickiness cookie the challenge was issued with — upstream
+// only accepts a c_token paired with its own bsrv. The worker stores the
+// matched set as a client-held session cookie. Mirrors src/challenge.js.
 
 export interface Challenge {
   salt: string
   index: number
   byteA: number
   byteB: number
+  bsrv?: string
 }
 
 export interface ChallengeSolution {
   token: string
   seconds: number
+  bsrv?: string
 }
 
 const BATCH_SIZE = 256

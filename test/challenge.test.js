@@ -127,7 +127,7 @@ test("returns the upstream error page untouched after retries are exhausted", as
   assert.equal(await response.text(), "<html>still broken</html>");
 });
 
-test("delegate mode surfaces the challenge and keeps the bsrv cookie", async () => {
+test("delegate mode surfaces the challenge with its bsrv cookie, without touching the jar", async () => {
   const origin = "https://delegate.test";
   const fetchImpl = async () =>
     new Response(CHALLENGE_HTML, {
@@ -144,13 +144,38 @@ test("delegate mode surfaces the challenge and keeps the bsrv cookie", async () 
       assert.ok(error instanceof ChallengeRequiredError);
       assert.equal(error.challenge.salt, "5DF2217304C9448892E026858C3CB92E301A725E");
       assert.equal(error.challenge.index, 5);
+      assert.equal(error.cookies.bsrv, "delegatebsrv");
       return true;
     },
   );
-  assert.equal(getSessionCookies(origin).bsrv, "delegatebsrv");
+  // Delegate mode keeps the session on the client; the jar stays empty.
+  assert.equal(getSessionCookies(origin), null);
 });
 
-test("stores browser-solved challenge tokens via the API", async () => {
+test("explicit session cookies override the isolate-local jar", async () => {
+  const origin = "https://override.test";
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, cookie: init.headers.get("Cookie") });
+    return new Response("<html>ok</html>", {
+      status: 200,
+      headers: { "Content-Type": "text/html", "Set-Cookie": "bsrv=fresh; path=/" },
+    });
+  };
+
+  const response = await fetchUpstream(
+    `${origin}/s/test`,
+    {},
+    { fetchImpl, sessionCookies: { bsrv: "clientbsrv", c_token: "C".repeat(40) + "1" } },
+  );
+
+  assert.equal(response.status, 200);
+  assert.match(calls[0].cookie, /bsrv=clientbsrv/);
+  // Client-held sessions are not merged into the isolate-local jar either.
+  assert.equal(getSessionCookies(origin), null);
+});
+
+test("challenge submissions set a client-held session cookie", async () => {
   const response = await worker.fetch(
     new Request("https://books.example.com/__z/api/challenge", {
       method: "POST",
@@ -158,6 +183,7 @@ test("stores browser-solved challenge tokens via the API", async () => {
       body: JSON.stringify({
         token: "5DF2217304C9448892E026858C3CB92E301A725E6494",
         seconds: 1.234,
+        bsrv: "63deec3e1b9160645ba500d2462bd144",
       }),
     }),
     { UPSTREAM_ORIGIN: "https://z-lib.sk" },
@@ -165,10 +191,22 @@ test("stores browser-solved challenge tokens via the API", async () => {
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { ok: true });
-  assert.equal(
-    getSessionCookies("https://z-lib.sk").c_token,
-    "5DF2217304C9448892E026858C3CB92E301A725E6494",
-  );
+
+  const setCookie = response.headers.get("Set-Cookie") || "";
+  assert.match(setCookie, /^z_zlib_session=[A-Za-z0-9_-]+/);
+  assert.match(setCookie, /HttpOnly/);
+  assert.match(setCookie, /SameSite=Lax/);
+
+  const encoded = setCookie.match(/^z_zlib_session=([^;]*)/)[1];
+  const session = JSON.parse(Buffer.from(encoded, "base64url").toString());
+  assert.deepEqual(session, {
+    c_token: "5DF2217304C9448892E026858C3CB92E301A725E6494",
+    c_time: "1.234",
+    bsrv: "63deec3e1b9160645ba500d2462bd144",
+  });
+
+  // The submission no longer writes to the isolate-local jar.
+  assert.equal(getSessionCookies("https://z-lib.sk"), null);
 });
 
 test("rejects malformed challenge submissions", async () => {
@@ -182,11 +220,97 @@ test("rejects malformed challenge submissions", async () => {
   );
   assert.equal(badToken.status, 400);
 
+  const badBsrv = await worker.fetch(
+    new Request("https://books.example.com/__z/api/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: "5DF2217304C9448892E026858C3CB92E301A725E6494",
+        seconds: 1,
+        bsrv: "not valid!",
+      }),
+    }),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+  assert.equal(badBsrv.status, 400);
+
   const badMethod = await worker.fetch(
     new Request("https://books.example.com/__z/api/challenge"),
     { UPSTREAM_ORIGIN: "https://z-lib.sk" },
   );
   assert.equal(badMethod.status, 405);
+});
+
+test("zsearch challenge payload carries the bsrv from the same 503 response", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    const rawHeaders = init?.headers;
+    const cookie = rawHeaders?.get
+      ? rawHeaders.get("Cookie")
+      : rawHeaders?.Cookie || rawHeaders?.cookie || null;
+    calls.push({ url: String(url), cookie });
+    return new Response(CHALLENGE_HTML, {
+      status: 503,
+      headers: {
+        "Content-Type": "text/html;charset=utf-8",
+        "Set-Cookie": "bsrv=63deec3e1b9160645ba500d2462bd144; path=/",
+      },
+    });
+  };
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const response = await worker.fetch(
+    new Request("https://books.example.com/__z/api/zsearch?q=test"),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+
+  assert.equal(response.status, 503);
+  const payload = await response.json();
+  assert.equal(payload.challenge.salt, "5DF2217304C9448892E026858C3CB92E301A725E");
+  assert.equal(payload.challenge.bsrv, "63deec3e1b9160645ba500d2462bd144");
+});
+
+test("zsearch forwards the client-held session cookie upstream", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    const rawHeaders = init?.headers;
+    const cookie = rawHeaders?.get
+      ? rawHeaders.get("Cookie")
+      : rawHeaders?.Cookie || rawHeaders?.cookie || null;
+    calls.push({ url: String(url), cookie });
+    return new Response("<html><body>no cards</body></html>", {
+      status: 200,
+      headers: { "Content-Type": "text/html" },
+    });
+  };
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const session = Buffer.from(
+    JSON.stringify({
+      bsrv: "63deec3e1b9160645ba500d2462bd144",
+      c_token: "5DF2217304C9448892E026858C3CB92E301A725E6494",
+      c_time: "1.234",
+    }),
+  ).toString("base64url");
+
+  const response = await worker.fetch(
+    new Request("https://books.example.com/__z/api/zsearch?q=test", {
+      headers: { Cookie: `z_zlib_session=${session}` },
+    }),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /^https:\/\/z-lib\.sk\/s\/test/);
+  assert.match(calls[0].cookie, /bsrv=63deec3e1b9160645ba500d2462bd144/);
+  assert.match(calls[0].cookie, /c_token=5DF2217304C9448892E026858C3CB92E301A725E6494/);
 });
 
 test("account download requires configuration", async () => {

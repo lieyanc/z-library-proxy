@@ -150,7 +150,7 @@ async function fetchWithChallenge<T>(
     try {
       const solution = await solveChallenge(challenge)
       if (solution) {
-        await submitChallengeSolution(solution)
+        await submitChallengeSolution({ ...solution, bsrv: challenge.bsrv })
         solved = true
       }
     } finally {

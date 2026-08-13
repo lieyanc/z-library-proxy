@@ -1,5 +1,5 @@
 import { searchOpenCatalogs } from "./catalog.js";
-import { ChallengeRequiredError, fetchUpstream, storeSessionCookies } from "./challenge.js";
+import { ChallengeRequiredError, fetchUpstream } from "./challenge.js";
 import { COVER_HOSTS, parseZlibBook, parseZlibFormats, parseZlibSearch } from "./zlib.js";
 import {
   isCidAllowed,
@@ -403,7 +403,7 @@ async function handleInternalRequest(request, requestUrl, env) {
     }
     const page = Math.min(Math.max(Number.parseInt(requestUrl.searchParams.get("page") || "1", 10) || 1, 1), 100);
 
-    const results = await searchZlibCatalog(query, page, env);
+    const results = await searchZlibCatalog(query, page, env, readZlibSession(request));
     if (results.challenge) {
       return jsonResponse(results, {
         status: 503,
@@ -422,7 +422,7 @@ async function handleInternalRequest(request, requestUrl, env) {
       return jsonResponse({ error: "Invalid book path" }, { status: 400 });
     }
 
-    const book = await fetchZlibBook(bookPath, env);
+    const book = await fetchZlibBook(bookPath, env, readZlibSession(request));
     if (book?.challenge) {
       return jsonResponse(book, {
         status: 503,
@@ -446,7 +446,7 @@ async function handleInternalRequest(request, requestUrl, env) {
       return jsonResponse({ error: "Invalid book id" }, { status: 400 });
     }
 
-    const result = await fetchZlibFormats(bookId, env);
+    const result = await fetchZlibFormats(bookId, env, readZlibSession(request));
     if (result?.challenge) {
       return jsonResponse(result, {
         status: 503,
@@ -500,9 +500,68 @@ async function handleInternalRequest(request, requestUrl, env) {
 }
 
 const CHALLENGE_TOKEN_RE = /^[0-9A-Fa-f]{40}\d{1,10}$/;
+const BSRV_RE = /^[a-f0-9]{16,64}$/i;
 
-// Accepts a PoW solution computed by the visitor's browser and stores it in
-// the upstream session jar for subsequent API/proxy fetches.
+// The upstream anti-bot session (bsrv stickiness + PoW token) is only valid
+// as a matched set, so it lives in this client-held cookie instead of the
+// isolate-local jar — requests from one visitor may hit different isolates.
+const ZLIB_SESSION_COOKIE = "z_zlib_session";
+const ZLIB_SESSION_MAX_AGE = 1800;
+
+function base64UrlEncode(value) {
+  return btoa(value).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+function base64UrlDecode(value) {
+  return atob(value.replaceAll("-", "+").replaceAll("_", "/"));
+}
+
+function buildZlibSessionCookie(cookies) {
+  return `${ZLIB_SESSION_COOKIE}=${base64UrlEncode(JSON.stringify(cookies))}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${ZLIB_SESSION_MAX_AGE}`;
+}
+
+// Reads and strictly validates the client-held upstream session. Returns a
+// plain cookie object ({bsrv?, c_token?, c_time?}) or null.
+function readZlibSession(request) {
+  const header = request.headers.get("Cookie") || "";
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0 || part.slice(0, eq).trim() !== ZLIB_SESSION_COOKIE) {
+      continue;
+    }
+    try {
+      const data = JSON.parse(base64UrlDecode(part.slice(eq + 1).trim()));
+      const cookies = {};
+      if (BSRV_RE.test(data?.bsrv || "")) {
+        cookies.bsrv = data.bsrv;
+      }
+      if (CHALLENGE_TOKEN_RE.test(data?.c_token || "")) {
+        cookies.c_token = data.c_token;
+      }
+      if (/^\d{1,4}(\.\d{1,3})?$/.test(data?.c_time || "")) {
+        cookies.c_time = data.c_time;
+      }
+      return cookies.c_token ? cookies : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// Shapes a delegated challenge for the browser: the PoW parameters plus the
+// bsrv stickiness cookie from the same 503 response.
+function challengePayload(error) {
+  const payload = { ...error.challenge };
+  if (error.cookies?.bsrv && BSRV_RE.test(error.cookies.bsrv)) {
+    payload.bsrv = error.cookies.bsrv;
+  }
+  return payload;
+}
+
+// Accepts a PoW solution computed by the visitor's browser (paired with the
+// bsrv the challenge was issued with) and stores it as a client-held session
+// cookie that subsequent API requests forward upstream.
 async function handleChallengeSubmission(request, env) {
   if (request.method !== "POST") {
     return methodNotAllowed("POST");
@@ -517,28 +576,30 @@ async function handleChallengeSubmission(request, env) {
 
   const token = typeof payload?.token === "string" ? payload.token : "";
   const seconds = Number(payload?.seconds);
+  const bsrv = typeof payload?.bsrv === "string" ? payload.bsrv : "";
   if (
     !CHALLENGE_TOKEN_RE.test(token) ||
     !Number.isFinite(seconds) ||
     seconds < 0 ||
-    seconds > 600
+    seconds > 600 ||
+    (bsrv && !BSRV_RE.test(bsrv))
   ) {
     return jsonResponse({ error: "Invalid challenge solution" }, { status: 400 });
   }
 
-  let upstream;
-  try {
-    upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
-  } catch (error) {
-    console.error(error);
-    return new Response("Worker configuration error", { status: 500 });
+  const sessionCookies = { c_token: token, c_time: seconds.toFixed(3) };
+  if (bsrv) {
+    sessionCookies.bsrv = bsrv;
   }
-
-  storeSessionCookies(upstream.origin, {
-    c_token: token,
-    c_time: seconds.toFixed(3),
-  });
-  return jsonResponse({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+  return jsonResponse(
+    { ok: true },
+    {
+      headers: {
+        "Cache-Control": "no-store",
+        "Set-Cookie": buildZlibSessionCookie(sessionCookies),
+      },
+    },
+  );
 }
 
 const ZLIB_FETCH_HEADERS = {
@@ -548,20 +609,20 @@ const ZLIB_FETCH_HEADERS = {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
 };
 
-async function fetchZlibPage(pathAndQuery, env) {
+async function fetchZlibPage(pathAndQuery, env, session = null) {
   const upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
   const response = await fetchUpstream(`${upstream.origin}${pathAndQuery}`, {
     headers: ZLIB_FETCH_HEADERS,
     redirect: "manual",
     signal: AbortSignal.timeout(20000),
-  }, { delegateChallenge: true });
+  }, { delegateChallenge: true, sessionCookies: session });
   if (!response.ok) {
     throw new Error(`Upstream catalog returned ${response.status}`);
   }
   return response.text();
 }
 
-async function searchZlibCatalog(query, page, env) {
+async function searchZlibCatalog(query, page, env, session = null) {
   const normalizedQuery = query.trim().slice(0, 200);
   let results = [];
   let ok = false;
@@ -569,12 +630,12 @@ async function searchZlibCatalog(query, page, env) {
   let challenge = null;
   try {
     const pageSuffix = page > 1 ? `?page=${page}` : "";
-    const html = await fetchZlibPage(`/s/${encodeURIComponent(normalizedQuery)}${pageSuffix}`, env);
+    const html = await fetchZlibPage(`/s/${encodeURIComponent(normalizedQuery)}${pageSuffix}`, env, session);
     results = parseZlibSearch(html);
     ok = true;
   } catch (caught) {
     if (caught instanceof ChallengeRequiredError) {
-      challenge = caught.challenge;
+      challenge = challengePayload(caught);
     } else {
       error = String(caught);
       console.error("Z-Library search failed", caught);
@@ -590,13 +651,13 @@ async function searchZlibCatalog(query, page, env) {
   };
 }
 
-async function fetchZlibBook(bookPath, env) {
+async function fetchZlibBook(bookPath, env, session = null) {
   try {
-    const html = await fetchZlibPage(bookPath, env);
+    const html = await fetchZlibPage(bookPath, env, session);
     return parseZlibBook(html, bookPath);
   } catch (error) {
     if (error instanceof ChallengeRequiredError) {
-      return { challenge: error.challenge };
+      return { challenge: challengePayload(error) };
     }
     console.error("Z-Library book fetch failed", error);
     return null;
@@ -607,7 +668,7 @@ async function fetchZlibBook(bookPath, env) {
 // endpoint /papi/book/<id>/formats (the "Download" dropdown on book pages).
 // The listing itself does not require an account session; downloads still go
 // through /__z/dl/, which does.
-async function fetchZlibFormats(bookId, env) {
+async function fetchZlibFormats(bookId, env, session = null) {
   try {
     const upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
     const accountCookies = (env.ZLIB_ACCOUNT_COOKIES || "").trim();
@@ -623,7 +684,7 @@ async function fetchZlibFormats(bookId, env) {
         redirect: "manual",
         signal: AbortSignal.timeout(20000),
       },
-      { delegateChallenge: true },
+      { delegateChallenge: true, sessionCookies: session },
     );
     if (!response.ok) {
       throw new Error(`Upstream formats returned ${response.status}`);
@@ -631,7 +692,7 @@ async function fetchZlibFormats(bookId, env) {
     return { bookId, formats: parseZlibFormats(await response.text()) };
   } catch (error) {
     if (error instanceof ChallengeRequiredError) {
-      return { challenge: error.challenge };
+      return { challenge: challengePayload(error) };
     }
     console.error("Z-Library formats fetch failed", error);
     return null;

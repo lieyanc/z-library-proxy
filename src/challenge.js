@@ -219,12 +219,16 @@ function responseWithText(text, response) {
 }
 
 // Thrown in delegate mode: the caller (browser frontend) should solve the
-// challenge locally and POST the token to /__z/api/challenge.
+// challenge locally and POST the token to /__z/api/challenge. Carries the
+// cookies the 503 response set (bsrv stickiness) so they can ride along with
+// the challenge payload: upstream only accepts a c_token paired with the bsrv
+// issued by the same 503 response.
 export class ChallengeRequiredError extends Error {
-  constructor(challenge) {
+  constructor(challenge, cookies = {}) {
     super("Upstream challenge must be solved by the client");
     this.name = "ChallengeRequiredError";
     this.challenge = challenge;
+    this.cookies = cookies;
   }
 }
 
@@ -239,21 +243,26 @@ export function looksLikeChallenge(response) {
 // Fetches an upstream URL, transparently solving the PoW challenge and
 // retrying transient 5xx failures. Returns the final upstream response.
 // With delegateChallenge: true the challenge is not solved here; a
-// ChallengeRequiredError carrying the parsed challenge is thrown instead so
-// the caller can hand it to the visitor's browser.
+// ChallengeRequiredError carrying the parsed challenge (plus the cookies the
+// 503 set) is thrown instead so the caller can hand it to the visitor's
+// browser. In delegate mode nothing is written to the isolate-local session
+// jar: the bsrv stickiness cookie is only valid paired with the token solved
+// for the same 503 response, so the session lives on the client (the worker
+// is stateless and requests may land on different isolates).
+// `sessionCookies` (a plain cookie object) overrides the jar for this fetch.
 export async function fetchUpstream(
   url,
   init,
-  { origin, fetchImpl = fetch, delegateChallenge = false } = {},
+  { origin, fetchImpl = fetch, delegateChallenge = false, sessionCookies = null } = {},
 ) {
   const sessionOrigin = origin || new URL(url).origin;
   let solves = 0;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     const headers = new Headers(init?.headers);
-    const session = readSession(sessionOrigin);
-    if (session) {
-      const merged = mergeCookieHeader(headers.get("Cookie"), session.cookies);
+    const cookies = sessionCookies || readSession(sessionOrigin)?.cookies || null;
+    if (cookies) {
+      const merged = mergeCookieHeader(headers.get("Cookie"), cookies);
       if (merged) {
         headers.set("Cookie", merged);
       }
@@ -268,7 +277,7 @@ export async function fetchUpstream(
           ? response.headers.getAll("Set-Cookie")
           : [];
     const freshCookies = parseSetCookiePairs(setCookies);
-    if (Object.keys(freshCookies).length > 0) {
+    if (!delegateChallenge && !sessionCookies && Object.keys(freshCookies).length > 0) {
       storeSessionCookies(sessionOrigin, freshCookies);
     }
 
@@ -284,7 +293,7 @@ export async function fetchUpstream(
       if (delegateChallenge) {
         const challenge = parseChallenge(text);
         if (challenge) {
-          throw new ChallengeRequiredError(challenge);
+          throw new ChallengeRequiredError(challenge, freshCookies);
         }
       } else if (solves < MAX_SOLVES_PER_REQUEST && attempt + 1 < MAX_ATTEMPTS) {
         solves += 1;
