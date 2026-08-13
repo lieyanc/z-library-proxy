@@ -61,13 +61,25 @@ function zlibSourceFailed(state: SearchState): boolean {
   )
 }
 
+// True when the upstream failure was a rate limit (HTTP 429): the visitor
+// gets a dedicated hint instead of the generic "search unavailable" text.
+function zlibRateLimited(state: SearchState): boolean {
+  return (
+    state.status === "done" &&
+    state.mode === "source" &&
+    (state.payload as ZlibSearchPayload).sources.zlib.rateLimited === true
+  )
+}
+
 function statusText(state: SearchState, verifying: boolean): string {
   switch (state.status) {
     case "loading":
       return verifying ? "正在通过人机验证…" : "搜索中…"
     case "done":
       return zlibSourceFailed(state)
-        ? "搜索暂不可用"
+        ? zlibRateLimited(state)
+          ? "源站限流"
+          : "搜索暂不可用"
         : `${state.payload.results.length} 项结果`
     case "error":
       return "搜索暂不可用"
@@ -404,11 +416,13 @@ export default function App({
             {(state.status === "error" || zlibFailed) && (
               <EmptyState
                 icon={SearchXIcon}
-                title="搜索暂不可用"
+                title={zlibRateLimited(state) ? "源站限流" : "搜索暂不可用"}
                 description={
-                  state.mode === "source"
-                    ? "Z-Library 服务暂时不可用，请稍后重试"
-                    : "开放资源服务暂时不可用，请稍后重试"
+                  zlibRateLimited(state)
+                    ? "Z-Library 源站暂时限制了访问频率，请稍等片刻再重试"
+                    : state.mode === "source"
+                      ? "Z-Library 服务暂时不可用，请稍后重试"
+                      : "开放资源服务暂时不可用，请稍后重试"
                 }
                 action={
                   <Button variant="outline" onClick={retrySearch}>

@@ -114,6 +114,73 @@ test("retries transient 502 responses before giving up", async () => {
   assert.equal(attempts, 3);
 });
 
+test("retries transient 429 rate-limit responses before giving up", async () => {
+  const origin = "https://ratelimited.test";
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      return new Response("too many requests", {
+        status: 429,
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+    return new Response("<html>ok</html>", {
+      status: 200,
+      headers: { "Content-Type": "text/html" },
+    });
+  };
+
+  const response = await fetchUpstream(`${origin}/s/test`, {}, { fetchImpl });
+
+  assert.equal(response.status, 200);
+  assert.equal(attempts, 3);
+});
+
+test("a hung attempt times out alone and the next attempt still runs", async () => {
+  const origin = "https://slow.test";
+  let calls = 0;
+  const fetchImpl = async (url, init) => {
+    calls += 1;
+    if (calls === 1) {
+      // First attempt hangs until its per-attempt signal fires.
+      return new Promise((resolve, reject) => {
+        init.signal.addEventListener("abort", () =>
+          reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
+        );
+      });
+    }
+    return new Response("<html>ok</html>", {
+      status: 200,
+      headers: { "Content-Type": "text/html" },
+    });
+  };
+
+  const startedAt = Date.now();
+  const response = await fetchUpstream(`${origin}/s/test`, {}, { fetchImpl, timeoutMs: 1500 });
+
+  assert.equal(response.status, 200);
+  assert.equal(calls, 2);
+  assert.ok(Date.now() - startedAt < 4000);
+});
+
+test("the total timeout budget still bounds the whole retry sequence", async () => {
+  const origin = "https://alwaysslow.test";
+  const fetchImpl = async (url, init) =>
+    new Promise((resolve, reject) => {
+      init.signal.addEventListener("abort", () =>
+        reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
+      );
+    });
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    fetchUpstream(`${origin}/s/test`, {}, { fetchImpl, timeoutMs: 1200 }),
+    (error) => error?.name === "TimeoutError",
+  );
+  assert.ok(Date.now() - startedAt < 4000);
+});
+
 test("returns the upstream error page untouched after retries are exhausted", async () => {
   const fetchImpl = async () =>
     new Response("<html>still broken</html>", {
@@ -311,6 +378,64 @@ test("zsearch forwards the client-held session cookie upstream", async (context)
   assert.match(calls[0].url, /^https:\/\/z-lib\.sk\/s\/test/);
   assert.match(calls[0].cookie, /bsrv=63deec3e1b9160645ba500d2462bd144/);
   assert.match(calls[0].cookie, /c_token=5DF2217304C9448892E026858C3CB92E301A725E6494/);
+});
+
+test("zsearch failure payloads are not cached at the edge", async (context) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response("too many requests", {
+      status: 429,
+      headers: { "Content-Type": "text/html" },
+    });
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const response = await worker.fetch(
+    new Request("https://books.example.com/__z/api/zsearch?q=test"),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.sources.zlib.ok, false);
+  assert.match(payload.sources.zlib.error, /429/);
+  assert.equal(payload.sources.zlib.rateLimited, true);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+});
+
+test("zsearch recovers when the upstream rate limit clears on a later attempt", async (context) => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls <= 2) {
+      return new Response("too many requests", {
+        status: 429,
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+    return new Response(
+      '<z-bookcard id="1" href="/book/1/title.html"><div slot="title">A Book</div><div slot="author">An Author</div></z-bookcard>',
+      { status: 200, headers: { "Content-Type": "text/html" } },
+    );
+  };
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const response = await worker.fetch(
+    new Request("https://books.example.com/__z/api/zsearch?q=test"),
+    { UPSTREAM_ORIGIN: "https://z-lib.sk" },
+  );
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.sources.zlib.ok, true);
+  assert.equal(payload.sources.zlib.rateLimited, false);
+  assert.equal(payload.results.length, 1);
+  assert.equal(calls, 3);
+  assert.equal(response.headers.get("Cache-Control"), "public, max-age=60, stale-while-revalidate=300");
 });
 
 test("account download requires configuration", async () => {

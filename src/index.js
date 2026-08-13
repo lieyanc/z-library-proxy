@@ -420,7 +420,14 @@ async function handleInternalRequest(request, requestUrl, env) {
       });
     }
     return jsonResponse(results, {
-      headers: { "Cache-Control": "public, max-age=60, stale-while-revalidate=300" },
+      headers: {
+        // Upstream failures (ok: false) must not be cached at the edge:
+        // serving a cached failure would turn the next retry into an
+        // instant, unrecoverable "搜索暂不可用".
+        "Cache-Control": results.sources.zlib.ok
+          ? "public, max-age=60, stale-while-revalidate=300"
+          : "no-store",
+      },
     });
   }
 
@@ -623,10 +630,11 @@ async function fetchZlibPage(pathAndQuery, env, session = null) {
   const response = await fetchUpstream(`${upstream.origin}${pathAndQuery}`, {
     headers: ZLIB_FETCH_HEADERS,
     redirect: "manual",
-    signal: AbortSignal.timeout(20000),
-  }, { delegateChallenge: true, sessionCookies: session });
+  }, { delegateChallenge: true, sessionCookies: session, timeoutMs: 20000 });
   if (!response.ok) {
-    throw new Error(`Upstream catalog returned ${response.status}`);
+    const error = new Error(`Upstream catalog returned ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return response.text();
 }
@@ -637,6 +645,7 @@ async function searchZlibCatalog(query, page, env, session = null) {
   let ok = false;
   let error = null;
   let challenge = null;
+  let rateLimited = false;
   try {
     const pageSuffix = page > 1 ? `?page=${page}` : "";
     const html = await fetchZlibPage(`/s/${encodeURIComponent(normalizedQuery)}${pageSuffix}`, env, session);
@@ -647,6 +656,7 @@ async function searchZlibCatalog(query, page, env, session = null) {
       challenge = challengePayload(caught);
     } else {
       error = String(caught);
+      rateLimited = caught?.status === 429;
       console.error("Z-Library search failed", caught);
     }
   }
@@ -656,7 +666,7 @@ async function searchZlibCatalog(query, page, env, session = null) {
     page,
     results,
     challenge,
-    sources: { zlib: { ok, count: results.length, error } },
+    sources: { zlib: { ok, count: results.length, error, rateLimited } },
   };
 }
 
@@ -691,9 +701,8 @@ async function fetchZlibFormats(bookId, env, session = null) {
           ...(accountCookies ? { Cookie: accountCookies } : {}),
         },
         redirect: "manual",
-        signal: AbortSignal.timeout(20000),
       },
-      { delegateChallenge: true, sessionCookies: session },
+      { delegateChallenge: true, sessionCookies: session, timeoutMs: 20000 },
     );
     if (!response.ok) {
       throw new Error(`Upstream formats returned ${response.status}`);
@@ -737,8 +746,7 @@ async function handleAccountDownload(request, requestUrl, env) {
       method: "GET",
       headers: { ...ZLIB_FETCH_HEADERS, Cookie: accountCookies },
       redirect: "manual",
-      signal: AbortSignal.timeout(20000),
-    });
+    }, { timeoutMs: 20000 });
   } catch (error) {
     console.error("Download resolution failed", error);
     return new Response("Bad Gateway", { status: 502 });
@@ -834,8 +842,7 @@ async function proxyCoverImage(request, requestUrl, env) {
       method: request.method,
       headers: { Accept: "image/avif,image/webp,image/*,*/*;q=0.8" },
       redirect: "manual",
-      signal: AbortSignal.timeout(15000),
-    });
+    }, { timeoutMs: 15000 });
   } catch {
     return new Response("Bad Gateway", { status: 502 });
   }

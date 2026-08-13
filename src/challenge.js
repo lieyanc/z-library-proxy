@@ -14,10 +14,17 @@ const DEFAULT_BYTE_A = 0xb0;
 const DEFAULT_BYTE_B = 0x0b;
 const MAX_SOLVE_ITERATIONS = 1_200_000;
 const SESSION_TTL_MS = 30 * 60 * 1000;
-const RETRYABLE_STATUSES = new Set([502, 503, 504]);
+// 429 is included because upstream rate-limits the shared Cloudflare egress
+// IPs (the worker has no IP of its own): a later attempt frequently lands on
+// a healthier egress and succeeds, so failing instantly would be wrong.
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const MAX_ATTEMPTS = 4;
 const MAX_SOLVES_PER_REQUEST = 2;
-const RETRY_BACKOFF_MS = [150, 400];
+const RETRY_BACKOFF_MS = [250, 800, 2000];
+// Longest a single attempt may run when the caller set a total budget
+// (timeoutMs): a hung upstream must not consume the whole budget before the
+// retry loop gets a chance to try another egress.
+const ATTEMPT_TIMEOUT_MS = 10000;
 
 // ---------------------------------------------------------------------------
 // SHA-1 proof-of-work solving.
@@ -250,13 +257,18 @@ export function looksLikeChallenge(response) {
 // for the same 503 response, so the session lives on the client (the worker
 // is stateless and requests may land on different isolates).
 // `sessionCookies` (a plain cookie object) overrides the jar for this fetch.
+// `timeoutMs` bounds the whole retry sequence; each attempt additionally
+// gets its own shorter signal so a hung upstream (tarpit) aborts just that
+// attempt and the next attempt still gets a fresh slice of the budget.
 export async function fetchUpstream(
   url,
   init,
-  { origin, fetchImpl = fetch, delegateChallenge = false, sessionCookies = null } = {},
+  { origin, fetchImpl = fetch, delegateChallenge = false, sessionCookies = null, timeoutMs = null } = {},
 ) {
   const sessionOrigin = origin || new URL(url).origin;
   let solves = 0;
+  const startedAt = Date.now();
+  const totalSignal = timeoutMs ? AbortSignal.timeout(timeoutMs) : null;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     const headers = new Headers(init?.headers);
@@ -268,7 +280,32 @@ export async function fetchUpstream(
       }
     }
 
-    const response = await fetchImpl(url, { ...init, headers });
+    let signal = init?.signal ?? undefined;
+    if (totalSignal) {
+      if (totalSignal.aborted) {
+        // The budget ran out while waiting between attempts.
+        throw totalSignal.reason ?? new Error("fetchUpstream timed out");
+      }
+      const remaining = Math.max(timeoutMs - (Date.now() - startedAt), 1);
+      // An attempt may use at most 60% of the remaining budget (hard-capped),
+      // so a hung upstream can never consume the whole budget before the
+      // retry loop gets another chance.
+      const attemptBudget = Math.min(remaining, ATTEMPT_TIMEOUT_MS, Math.max(Math.ceil(remaining * 0.6), 1));
+      signal = AbortSignal.any([totalSignal, AbortSignal.timeout(attemptBudget)]);
+    }
+
+    let response;
+    try {
+      response = await fetchImpl(url, { ...init, headers, ...(signal ? { signal } : {}) });
+    } catch (error) {
+      // Network failures and per-attempt timeouts: retry while attempts and
+      // budget remain — a later attempt may land on a healthier upstream IP.
+      if (attempt + 1 < MAX_ATTEMPTS && (!totalSignal || !totalSignal.aborted)) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS[attempt] ?? 2000));
+        continue;
+      }
+      throw error;
+    }
 
     const setCookies =
       typeof response.headers.getSetCookie === "function"

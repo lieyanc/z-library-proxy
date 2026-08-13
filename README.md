@@ -7,7 +7,7 @@
 - `/` 使用精简搜索首页，不加载源站首页的其他模块。
 - 开放资源搜索同时接入 Project Gutenberg 和 Open Library。Gutenberg 结果强制要求 `copyright=false`，Open Library 结果强制要求 `ebook_access=public` 和 `public_scan_b=true`。
 - Z-Library（授权书库）为默认搜索模式，不跳转源站页面：Worker 在服务端抓取并解析源站结果页（`<z-bookcard>`），以自有界面渲染；点击结果弹出书籍详情对话框（元数据、简介、下载入口、IPFS 网关测速），封面经 `/__z/cover` 同源代理。登录、Cookie 和授权下载仍由源站处理。搜索词非空时再次点击已选中的“Z-Library”切换钮，可选择跳转到 `/s/<关键词>` 以源站原始样式渲染。
-- 源站反爬挑战（SHA-1 PoW）由浏览器本地求解：Worker 遇到挑战时把挑战参数连同该次响应签发的 `bsrv` 粘性 Cookie 一起以 JSON 下发（503 + `challenge`），前端求解后经 `POST /__z/api/challenge` 回传 token 与 `bsrv`（源站只接受与同次 503 配对的 `bsrv` + `c_token`），Worker 以 `Set-Cookie` 把配对好的会话种在浏览器侧，后续 API 请求自动携带并转发上游——Worker 本身无状态，不受 isolate 切换影响；全程自动，前端显示“正在通过人机验证…”。Worker 也内置了 WebCrypto 求解器作为代理页面流的兜底，并对 502/503/504 做退避重试。
+- 源站反爬挑战（SHA-1 PoW）由浏览器本地求解：Worker 遇到挑战时把挑战参数连同该次响应签发的 `bsrv` 粘性 Cookie 一起以 JSON 下发（503 + `challenge`），前端求解后经 `POST /__z/api/challenge` 回传 token 与 `bsrv`（源站只接受与同次 503 配对的 `bsrv` + `c_token`），Worker 以 `Set-Cookie` 把配对好的会话种在浏览器侧，后续 API 请求自动携带并转发上游——Worker 本身无状态，不受 isolate 切换影响；全程自动，前端显示“正在通过人机验证…”。Worker 也内置了 WebCrypto 求解器作为代理页面流的兜底，并对 429/502/503/504 做退避重试（429 是源站对共享 Cloudflare 出口 IP 的限流，重试常会落到更健康的出口上）；每次上游请求受整体超时预算约束，单个卡住的尝试（tarpit）只消耗自己的超时，不会吞掉后续重试。
 - 源站搜索页注入精简工具栏并压缩广告、页脚等非核心区域。
 - 页面出现 `ipfs://`、`/ipfs/<CID>` 或 `data-cid` 时提供 IPFS 网关测速。测速仅访问 `dweb.link`、`ipfs.io` 和 `w3s.link`，每个网关最多读取 64 KiB。
 - 部署感知自刷新：构建时把当前 git commit 注入 `src/assets.generated.js`，首页 HTML（`no-store`）经 `data-commit` 下发，前端轮询 `/__z/api/version`，发现 commit 变化即自动 `location.reload()`；静态资源 URL 带内容哈希 `?v=`，标题栏仓库名旁显示 `@<commit>` 链接。

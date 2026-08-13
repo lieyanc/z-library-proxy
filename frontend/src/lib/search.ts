@@ -66,6 +66,9 @@ export function workerDownloadUrl(downloadPath: string | null | undefined): stri
 export interface CatalogSource {
   ok: boolean
   count: number
+  // Set by the worker when the upstream search was rate-limited (HTTP 429)
+  // after its internal retries — the UI shows a dedicated prompt for it.
+  rateLimited?: boolean
 }
 
 export interface SearchPayload {
