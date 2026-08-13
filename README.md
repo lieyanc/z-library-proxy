@@ -7,7 +7,7 @@
 - `/` 使用精简搜索首页，不加载源站首页的其他模块。
 - 开放资源搜索同时接入 Project Gutenberg 和 Open Library。Gutenberg 结果强制要求 `copyright=false`，Open Library 结果强制要求 `ebook_access=public` 和 `public_scan_b=true`。
 - Z-Library（授权书库）为默认搜索模式，不跳转源站页面：Worker 在服务端抓取并解析源站结果页（`<z-bookcard>`），以自有界面渲染；点击结果弹出书籍详情对话框（元数据、简介、下载入口、IPFS 网关测速），封面经 `/__z/cover` 同源代理。登录、Cookie 和授权下载仍由源站处理。搜索词非空时再次点击已选中的“Z-Library”切换钮，可选择跳转到 `/s/<关键词>` 以源站原始样式渲染。
-- 源站反爬挑战（SHA-1 PoW）由浏览器本地求解：Worker 遇到挑战时把挑战参数连同该次响应签发的 `bsrv` 粘性 Cookie 一起以 JSON 下发（503 + `challenge`），前端求解后经 `POST /__z/api/challenge` 回传 token 与 `bsrv`（源站只接受与同次 503 配对的 `bsrv` + `c_token`），Worker 以 `Set-Cookie` 把配对好的会话种在浏览器侧，后续 API 请求自动携带并转发上游——Worker 本身无状态，不受 isolate 切换影响；全程自动，前端显示“正在通过人机验证…”。Worker 也内置了 WebCrypto 求解器作为代理页面流的兜底，并对 429/502/503/504 做退避重试（429 是源站对共享 Cloudflare 出口 IP 的限流，重试常会落到更健康的出口上）；每次上游请求受整体超时预算约束，单个卡住的尝试（tarpit）只消耗自己的超时，不会吞掉后续重试。
+- 源站反爬挑战（SHA-1 PoW）先在 Worker 侧用 WebCrypto 自行求解并立刻用配对好的会话重试（每轮最多 2 次求解、4 次上游尝试，共享 Cloudflare 出口 IP 下源站常拒首次重试，多次尝试可显著提高收敛率）；仍未通过时才把最新挑战参数连同该次响应签发的 `bsrv` 粘性 Cookie 一起以 JSON 下发（503 + `challenge`），浏览器本地求解后经 `POST /__z/api/challenge` 回传 token 与 `bsrv`（源站只接受与同次 503 配对的 `bsrv` + `c_token`），Worker 以 `Set-Cookie` 把配对好的会话种在浏览器侧，后续 API 请求自动携带并转发上游——Worker 本身无状态，不受 isolate 切换影响；前端最多重试 4 轮挑战，全程自动，显示“正在通过人机验证…”。同时 Worker 对 429/502/503/504 做退避重试（429 是源站对共享 Cloudflare 出口 IP 的限流，重试常会落到更健康的出口上）；每次上游请求受整体超时预算约束，单个卡住的尝试（tarpit）只消耗自己的超时，不会吞掉后续重试。
 - 源站搜索页注入精简工具栏并压缩广告、页脚等非核心区域。
 - 页面出现 `ipfs://`、`/ipfs/<CID>` 或 `data-cid` 时提供 IPFS 网关测速。测速仅访问 `dweb.link`、`ipfs.io` 和 `w3s.link`，每个网关最多读取 64 KiB。
 - 部署感知自刷新：构建时把当前 git commit 注入 `src/assets.generated.js`，首页 HTML（`no-store`）经 `data-commit` 下发，前端轮询 `/__z/api/version`，发现 commit 变化即自动 `location.reload()`；静态资源 URL 带内容哈希 `?v=`，标题栏仓库名旁显示 `@<commit>` 链接。
@@ -25,7 +25,7 @@
 - `GET /__z/api/ipfs-probe?cid=<CID>&path=<可选路径>&filename=<可选文件名>` — IPFS 网关测速（JSON），返回各网关延迟、样本速度，以及 CID 已授权时的 `/__z/ipfs/` 代理下载地址。
 - `GET /__z/dl/<hash>` — 账户下载中转：用已配置的账户会话解析 `/dl/<hash>` 的 302 签名 CDN 地址并流式回传文件（支持断点续传式开放 Range），未配置账户时返回 501。
 
-PoW 求解（平均约 6.5 万次 SHA-1）默认在浏览器本地完成，Worker 零 CPU 负担，免费版即可运行；Worker 内置的 WebCrypto 兜底求解器（`crypto.subtle` 不计入 CPU 时间）只服务直接访问代理页面的场景。
+PoW 求解（平均约 6.5 万次 SHA-1）优先在 Worker 侧用 WebCrypto 完成（`crypto.subtle` 不计入 CPU 时间，免费版即可运行），Worker 求解失败或重试耗尽后才委托浏览器求解，浏览器最多再尝试 4 轮；代理页面流同样由 Worker 内置求解器兜底。
 
 ### 源站账户会话（下载用）
 

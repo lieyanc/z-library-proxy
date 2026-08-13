@@ -667,7 +667,7 @@ async function fetchZlibPage(pathAndQuery, env, session = null) {
   const response = await fetchUpstream(`${upstream.origin}${pathAndQuery}`, {
     headers: ZLIB_FETCH_HEADERS,
     redirect: "manual",
-  }, { delegateChallenge: true, sessionCookies: session, timeoutMs: 20000 });
+  }, { delegateChallenge: "solve", sessionCookies: session, timeoutMs: 20000 });
   if (!response.ok) {
     const error = new Error(`Upstream catalog returned ${response.status}`);
     error.status = response.status;
@@ -739,7 +739,7 @@ async function fetchZlibFormats(bookId, env, session = null) {
         },
         redirect: "manual",
       },
-      { delegateChallenge: true, sessionCookies: session, timeoutMs: 20000 },
+      { delegateChallenge: "solve", sessionCookies: session, timeoutMs: 20000 },
     );
     if (!response.ok) {
       throw new Error(`Upstream formats returned ${response.status}`);

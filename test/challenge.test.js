@@ -242,6 +242,59 @@ test("explicit session cookies override the isolate-local jar", async () => {
   assert.equal(getSessionCookies(origin), null);
 });
 
+test("solve mode solves the challenge and retries with the fresh pair without touching the jar", async () => {
+  const origin = "https://solvemode.test";
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ cookie: init.headers.get("Cookie") });
+    if (calls.length === 1) {
+      return new Response(CHALLENGE_HTML, {
+        status: 503,
+        headers: {
+          "Content-Type": "text/html;charset=utf-8",
+          "Set-Cookie": "bsrv=solvebsrv; path=/",
+        },
+      });
+    }
+    return new Response("<html>ok</html>", {
+      status: 200,
+      headers: { "Content-Type": "text/html" },
+    });
+  };
+
+  const response = await fetchUpstream(`${origin}/s/test`, {}, { fetchImpl, delegateChallenge: "solve" });
+
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].cookie, /bsrv=solvebsrv/);
+  assert.match(calls[1].cookie, /c_token=5DF2217304C9448892E026858C3CB92E301A725E6494/);
+  assert.match(calls[1].cookie, /c_time=\d+\.\d{3}/);
+  // The request-scoped pair is not shared with other requests or the jar.
+  assert.equal(getSessionCookies(origin), null);
+});
+
+test("solve mode delegates the latest challenge to the browser after its solves are exhausted", async () => {
+  const origin = "https://solveexhausted.test";
+  const fetchImpl = async () =>
+    new Response(CHALLENGE_HTML, {
+      status: 503,
+      headers: {
+        "Content-Type": "text/html;charset=utf-8",
+        "Set-Cookie": "bsrv=latebsrv; path=/",
+      },
+    });
+
+  await assert.rejects(
+    fetchUpstream(`${origin}/s/test`, {}, { fetchImpl, delegateChallenge: "solve" }),
+    (error) => {
+      assert.ok(error instanceof ChallengeRequiredError);
+      assert.equal(error.challenge.salt, "5DF2217304C9448892E026858C3CB92E301A725E");
+      assert.equal(error.cookies.bsrv, "latebsrv");
+      return true;
+    },
+  );
+});
+
 test("challenge submissions set a client-held session cookie", async () => {
   const response = await worker.fetch(
     new Request("https://books.example.com/__z/api/challenge", {

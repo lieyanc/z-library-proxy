@@ -251,13 +251,19 @@ export function looksLikeChallenge(response) {
 
 // Fetches an upstream URL, transparently solving the PoW challenge and
 // retrying transient 5xx failures. Returns the final upstream response.
-// With delegateChallenge: true the challenge is not solved here; a
-// ChallengeRequiredError carrying the parsed challenge (plus the cookies the
-// 503 set) is thrown instead so the caller can hand it to the visitor's
-// browser. In delegate mode nothing is written to the isolate-local session
-// jar: the bsrv stickiness cookie is only valid paired with the token solved
-// for the same 503 response, so the session lives on the client (the worker
-// is stateless and requests may land on different isolates).
+// Challenge handling modes:
+//   delegateChallenge: true  — never solve here; throw a ChallengeRequiredError
+//     carrying the parsed challenge (plus the cookies the 503 set) so the
+//     caller can hand it to the visitor's browser.
+//   delegateChallenge: false — solve here (shared isolate-local session jar)
+//     and keep the raw upstream page for the proxied HTML flow.
+//   delegateChallenge: "solve" — solve here per request (request-scoped pair,
+//     nothing written to the jar), retrying immediately with the fresh pair;
+//     only when the attempts are exhausted (or a solve fails) is the latest
+//     challenge delegated to the browser. Used by the JSON APIs: the upstream
+//     frequently rejects a first retry from shared Cloudflare egress IPs, and
+//     several in-flight attempts per client round converge far more often
+//     than a single shot.
 // `sessionCookies` (a plain cookie object) overrides the jar for this fetch.
 // `timeoutMs` bounds the whole retry sequence; each attempt additionally
 // gets its own shorter signal so a hung upstream (tarpit) aborts just that
@@ -268,13 +274,16 @@ export async function fetchUpstream(
   { origin, fetchImpl = fetch, delegateChallenge = false, sessionCookies = null, timeoutMs = null } = {},
 ) {
   const sessionOrigin = origin || new URL(url).origin;
+  const solveMode = delegateChallenge === "solve";
   let solves = 0;
+  let localPair = null;
   const startedAt = Date.now();
   const totalSignal = timeoutMs ? AbortSignal.timeout(timeoutMs) : null;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     const headers = new Headers(init?.headers);
-    const cookies = sessionCookies || readSession(sessionOrigin)?.cookies || null;
+    const cookies =
+      (solveMode && localPair) || sessionCookies || readSession(sessionOrigin)?.cookies || null;
     if (cookies) {
       const merged = mergeCookieHeader(headers.get("Cookie"), cookies);
       if (merged) {
@@ -316,7 +325,7 @@ export async function fetchUpstream(
           ? response.headers.getAll("Set-Cookie")
           : [];
     const freshCookies = parseSetCookiePairs(setCookies);
-    if (!delegateChallenge && !sessionCookies && Object.keys(freshCookies).length > 0) {
+    if (!delegateChallenge && !sessionCookies && !solveMode && Object.keys(freshCookies).length > 0) {
       storeSessionCookies(sessionOrigin, freshCookies);
     }
 
@@ -329,9 +338,28 @@ export async function fetchUpstream(
     const text = await response.text();
 
     if (response.status === 503 && text.includes(CHALLENGE_TITLE)) {
-      if (delegateChallenge) {
-        const challenge = parseChallenge(text);
+      const challenge = parseChallenge(text);
+      if (delegateChallenge === true) {
         if (challenge) {
+          throw new ChallengeRequiredError(challenge, freshCookies);
+        }
+      } else if (solveMode) {
+        if (challenge && solves < MAX_SOLVES_PER_REQUEST && attempt + 1 < MAX_ATTEMPTS) {
+          solves += 1;
+          const solution = await solveChallenge(challenge);
+          if (solution) {
+            // Request-scoped matched pair (bsrv from this 503 + fresh token):
+            // retry immediately while the pair is hot.
+            localPair = {
+              ...freshCookies,
+              c_token: solution.token,
+              c_time: solution.seconds.toFixed(3),
+            };
+            continue;
+          }
+          throw new ChallengeRequiredError(challenge, freshCookies);
+        }
+        if (challenge && attempt + 1 >= MAX_ATTEMPTS) {
           throw new ChallengeRequiredError(challenge, freshCookies);
         }
       } else if (solves < MAX_SOLVES_PER_REQUEST && attempt + 1 < MAX_ATTEMPTS) {
@@ -346,6 +374,15 @@ export async function fetchUpstream(
     if (attempt + 1 < MAX_ATTEMPTS) {
       await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS[attempt] ?? 800));
       continue;
+    }
+
+    // Attempts exhausted: in solve mode the browser takes over with the
+    // freshest challenge; otherwise the raw upstream page is returned.
+    if (solveMode && response.status === 503) {
+      const challenge = parseChallenge(text);
+      if (challenge) {
+        throw new ChallengeRequiredError(challenge, freshCookies);
+      }
     }
 
     return responseWithText(text, response);
