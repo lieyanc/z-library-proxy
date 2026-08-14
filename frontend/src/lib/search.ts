@@ -117,6 +117,24 @@ export interface IpfsProbePayload {
   gateways: IpfsGatewayProbe[]
 }
 
+export interface OriginHealthResult {
+  origin: string
+  host: string
+  reachable: boolean
+  ok: boolean
+  challenge: boolean
+  status: number | null
+  latencyMs: number | null
+  error: string | null
+}
+
+export interface OriginHealthPayload {
+  checkedAt: string | null
+  origins: string[]
+  results: OriginHealthResult[]
+  persisted?: boolean
+}
+
 export function safeUrl(value: string | null | undefined): string | null {
   if (!value) return null
   // Allow same-origin paths produced by the worker (proxied upstream pages).
@@ -225,6 +243,28 @@ export async function probeIpfsGateways(cid: string): Promise<IpfsProbePayload> 
   })
   if (!response.ok) {
     throw new Error(`IPFS probe failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchOriginHealth(): Promise<OriginHealthPayload> {
+  const response = await fetch("/__z/api/origins", {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  })
+  if (!response.ok) {
+    throw new Error(`Origin health failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function scanOriginHealth(): Promise<OriginHealthPayload> {
+  const response = await fetch("/__z/api/origins/scan", {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  })
+  if (!response.ok) {
+    throw new Error(`Origin scan failed with status ${response.status}`)
   }
   return response.json()
 }

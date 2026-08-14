@@ -4,8 +4,14 @@
   "main": "src/index.js",
   "compatibility_date": "2026-08-05",
   "workers_dev": true,
+  "triggers": {
+    "crons": ["*/30 * * * *"]
+  },
+  // After `npx wrangler kv namespace create ORIGIN_HEALTH`, add the returned
+  // namespace ID here as a `kv_namespaces` binding named ORIGIN_HEALTH.
   "vars": {
     "ALLOWED_IPFS_CIDS": "*",
-    "UPSTREAM_ORIGIN": "https://z-lib.sk"
+    "UPSTREAM_ORIGIN": "https://z-lib.fm",
+    "UPSTREAM_ORIGINS": "https://z-lib.fm,https://z-lib.gd,https://z-lib.gl,https://z-lib.sk"
   }
 }

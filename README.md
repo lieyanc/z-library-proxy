@@ -1,6 +1,6 @@
 # z-library-proxy
 
-使用 Cloudflare Workers 将请求转发到 `https://z-lib.sk`。Worker 会保留请求方法、查询参数、请求体和 Cookie，并改写同源重定向、Cookie 域以及 HTML 中的同源绝对 URL。
+使用 Cloudflare Workers 将请求转发到 `https://z-lib.fm`。Worker 会保留请求方法、查询参数、请求体和 Cookie，并改写同源重定向、Cookie 域以及 HTML 中的同源绝对 URL。
 
 ## 功能
 
@@ -12,10 +12,13 @@
 - 页面出现 `ipfs://`、`/ipfs/<CID>` 或 `data-cid` 时提供 IPFS 网关测速。测速仅访问 `dweb.link`、`ipfs.io` 和 `w3s.link`，每个网关最多读取 64 KiB。
 - 部署感知自刷新：构建时把当前 git commit 注入 `src/assets.generated.js`，首页 HTML（`no-store`）经 `data-commit` 下发，前端轮询 `/__z/api/version`，发现 commit 变化即自动 `location.reload()`；静态资源 URL 带内容哈希 `?v=`，标题栏仓库名旁显示 `@<commit>` 链接。
 - 已授权的 CID 可通过当前 Worker 流式代理下载，支持 `HEAD`、`Range`、`ETag` 和网关故障切换；未授权 CID 只显示网关直连。
+- 每 30 分钟由 Cron Trigger 并行检测 `UPSTREAM_ORIGINS` 中的源站，把检测时间、延迟、HTTP 状态和挑战状态写入 KV；首页显示最近结果，并允许手动重新扫描。
 
 ### 内置 API
 
 - `GET /__z/api/version` — 当前构建的版本信息（`{version, commit}`，`no-store`），供前端检测部署。
+- `GET /__z/api/origins` — 读取最近一次源站检测结果；结果未写入 KV 时返回已配置域名和空结果。
+- `POST /__z/api/origins/scan` — 立即并行检测环境变量中的源站并写入 KV。
 - `GET /__z/api/search?q=<关键词>` — 开放资源搜索（Project Gutenberg + Open Library，JSON）。
 - `GET /__z/api/zsearch?q=<关键词>&page=<页码>` — 源站搜索结果（JSON）。源站挑战时返回 `503 + {challenge}`。成功结果写入 Cache API 缓存 5 分钟、同关键词的并发请求合并为一次上游抓取（热门词和重复点击不再消耗上游限流额度）；失败与挑战结果一律不缓存。
 - `GET /__z/api/zbook?path=/book/<id>/<slug>.html` — 书籍详情（元数据、IPFS CID、下载路径、数字书籍 ID、是否已配置下载账户）。挑战时同样返回 `503 + {challenge}`。
@@ -47,7 +50,8 @@ remix_userid=<你的 userid>; remix_userkey=<你的 userkey>
 ```jsonc
 "vars": {
   "ALLOWED_IPFS_CIDS": "bafy... Qm...",
-  "UPSTREAM_ORIGIN": "https://z-lib.sk"
+  "UPSTREAM_ORIGIN": "https://z-lib.fm",
+  "UPSTREAM_ORIGINS": "https://z-lib.fm,https://z-lib.gd,https://z-lib.gl,https://z-lib.sk"
 }
 ```
 
@@ -83,7 +87,23 @@ Worker 只连接代码中固定的三个 IPFS 网关，不接受自定义上游�
 
 部署成功后，每次向 `master` 推送提交都会自动发布；其他分支可生成预览版本。Worker 名称必须与 [`wrangler.jsonc`](./wrangler.jsonc) 中的 `name` 完全一致。
 
-如需绑定自己的域名，在该 Worker 的 **Settings > Domains & Routes** 中添加 Custom Domain。源站地址位于 [`wrangler.jsonc`](./wrangler.jsonc) 的 `UPSTREAM_ORIGIN`，修改后提交到 Git 即会随下一次构建部署；该值必须是没有路径、查询参数和片段的 HTTPS Origin。
+如需绑定自己的域名，在该 Worker 的 **Settings > Domains & Routes** 中添加 Custom Domain。源站地址位于 [`wrangler.jsonc`](./wrangler.jsonc) 的 `UPSTREAM_ORIGIN`，检测列表位于 `UPSTREAM_ORIGINS`，修改后提交到 Git 即会随下一次构建部署；这些值必须是没有路径、查询参数和片段的 HTTPS Origin。
+
+### 源站健康检测 KV
+
+首次部署前创建 KV namespace，并把返回的 ID 绑定为 `ORIGIN_HEALTH`：
+
+```bash
+npx wrangler kv namespace create ORIGIN_HEALTH
+```
+
+在 `wrangler.jsonc` 中添加：
+
+```jsonc
+"kv_namespaces": [{ "binding": "ORIGIN_HEALTH", "id": "<上一步返回的 namespace ID>" }]
+```
+
+未配置绑定时，检测 API 仍可即时探测，但 Cron 结果不会持久化。
 
 ## 本地调试（可选）
 

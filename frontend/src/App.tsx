@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useState } from "react"
-import { BookOpenIcon, SearchIcon, SearchXIcon } from "lucide-react"
+import {
+  BookOpenIcon,
+  CircleCheckIcon,
+  CircleXIcon,
+  Clock3Icon,
+  Globe2Icon,
+  RefreshCwIcon,
+  SearchIcon,
+  SearchXIcon,
+  ShieldAlertIcon,
+} from "lucide-react"
 
 import { BookCard } from "@/components/book-card"
 import { BookDetailDialog } from "@/components/book-detail-dialog"
@@ -37,10 +47,19 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
   Book,
   CatalogSource,
+  OriginHealthPayload,
+  OriginHealthResult,
   SearchPayload,
   ZlibSearchPayload,
 } from "@/lib/search"
-import { searchBooks, searchZlib, sourceSearchUrl, ChallengeFailedError } from "@/lib/search"
+import {
+  fetchOriginHealth,
+  scanOriginHealth,
+  searchBooks,
+  searchZlib,
+  sourceSearchUrl,
+  ChallengeFailedError,
+} from "@/lib/search"
 
 type Mode = "open" | "source"
 
@@ -141,6 +160,104 @@ function EmptyState({
   )
 }
 
+function originStatus(result: OriginHealthResult | undefined) {
+  if (!result) {
+    return { label: "未检测", Icon: Clock3Icon, className: "text-muted-foreground" }
+  }
+  if (result.ok) {
+    return { label: "可用", Icon: CircleCheckIcon, className: "text-emerald-600 dark:text-emerald-400" }
+  }
+  if (result.challenge) {
+    return { label: "可达，需验证", Icon: ShieldAlertIcon, className: "text-amber-600 dark:text-amber-400" }
+  }
+  if (result.reachable) {
+    return { label: "可达", Icon: ShieldAlertIcon, className: "text-amber-600 dark:text-amber-400" }
+  }
+  return { label: "不可达", Icon: CircleXIcon, className: "text-destructive" }
+}
+
+function formatCheckedAt(value: string | null) {
+  if (!value) return "尚未检测"
+  const date = new Date(value)
+  return Number.isNaN(date.valueOf())
+    ? "检测时间未知"
+    : `最近检测 ${date.toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })}`
+}
+
+function OriginHealthSection({
+  payload,
+  loading,
+  error,
+  onRescan,
+}: {
+  payload: OriginHealthPayload | null
+  loading: boolean
+  error: string | null
+  onRescan: () => void
+}) {
+  const results = new Map((payload?.results ?? []).map((result) => [result.origin, result]))
+  const origins = payload?.origins ?? []
+
+  return (
+    <section aria-labelledby="origin-health-title" className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <Globe2Icon className="size-4 text-muted-foreground" aria-hidden="true" />
+          <h2 id="origin-health-title" className="text-lg font-semibold">
+            源站状态
+          </h2>
+          <span className="truncate text-sm text-muted-foreground">
+            {formatCheckedAt(payload?.checkedAt ?? null)}
+          </span>
+        </div>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={onRescan}
+          disabled={loading}
+          aria-label="重新扫描源站"
+          title="重新扫描源站"
+        >
+          <RefreshCwIcon className={loading ? "animate-spin" : undefined} />
+        </Button>
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {payload?.persisted === false && (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          KV 尚未绑定，扫描结果仅在本次请求中有效
+        </p>
+      )}
+      {origins.length === 0 ? (
+        <p className="text-sm text-muted-foreground">未配置检测域名</p>
+      ) : (
+        <ul className="grid gap-3 sm:grid-cols-2" aria-live="polite">
+          {origins.map((origin) => {
+            const result = results.get(origin)
+            const status = originStatus(result)
+            const StatusIcon = status.Icon
+            const host = result?.host ?? origin.replace(/^https:\/\//, "")
+            return (
+              <li key={origin} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border p-3">
+                <div className="min-w-0">
+                  <p className="break-all font-mono text-sm">{host}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {result?.latencyMs != null ? `${result.latencyMs} ms` : "等待检测"}
+                    {result?.status != null ? ` · HTTP ${result.status}` : ""}
+                  </p>
+                </div>
+                <span className={`flex shrink-0 items-center gap-1 text-xs font-medium ${status.className}`}>
+                  <StatusIcon className="size-4" aria-hidden="true" />
+                  {status.label}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 const GITHUB_REPO_URL = "https://github.com/lieyanc/z-library-proxy"
 
 // Polls the worker's build version and reloads the tab when a deploy lands,
@@ -196,6 +313,22 @@ export default function App({
   const [selectedBook, setSelectedBook] = useState<Book | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [sourceRenderOpen, setSourceRenderOpen] = useState(false)
+  const [originHealth, setOriginHealth] = useState<OriginHealthPayload | null>(null)
+  const [originHealthLoading, setOriginHealthLoading] = useState(true)
+  const [originHealthError, setOriginHealthError] = useState<string | null>(null)
+
+  const refreshOriginHealth = useCallback(async (scan = false) => {
+    setOriginHealthLoading(true)
+    setOriginHealthError(null)
+    try {
+      const payload = scan ? await scanOriginHealth() : await fetchOriginHealth()
+      setOriginHealth(payload)
+    } catch (error) {
+      setOriginHealthError(error instanceof Error ? error.message : "源站状态读取失败")
+    } finally {
+      setOriginHealthLoading(false)
+    }
+  }, [])
 
   const runSearch = useCallback(async (value: string, searchMode: Mode) => {
     const trimmed = value.trim()
@@ -236,6 +369,10 @@ export default function App({
     }
   }, [initialQuery, runSearch])
 
+  useEffect(() => {
+    void refreshOriginHealth()
+  }, [refreshOriginHealth])
+
   const openDetail = useCallback((book: Book) => {
     setSelectedBook(book)
     setDetailOpen(true)
@@ -261,6 +398,9 @@ export default function App({
     if (state.status === "error" || state.status === "done") {
       void runSearch(query, state.mode)
     }
+  }
+  const rescanOrigins = () => {
+    void refreshOriginHealth(true)
   }
   const showCommit = buildCommit !== "" && buildCommit !== "unknown"
   useDeployReload(buildCommit)
@@ -379,6 +519,12 @@ export default function App({
             <ToggleGroupItem value="open">开放资源</ToggleGroupItem>
           </ToggleGroup>
         </section>
+        <OriginHealthSection
+          payload={originHealth}
+          loading={originHealthLoading}
+          error={originHealthError}
+          onRescan={rescanOrigins}
+        />
         {state.status !== "idle" && (
           <section aria-live="polite" className="flex flex-col gap-4">
             <div className="flex items-baseline justify-between gap-4">

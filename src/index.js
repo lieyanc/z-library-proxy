@@ -9,6 +9,12 @@ import {
   proxyIpfsDownload,
 } from "./ipfs.js";
 import {
+  configuredOrigins,
+  readOriginHealth,
+  scanOrigins,
+  writeOriginHealth,
+} from "./origin-health.js";
+import {
   APP_CSS,
   APP_JS,
   ASSETS_VERSION,
@@ -20,7 +26,10 @@ import {
   THEME_INIT_SCRIPT_SHA256,
 } from "./ui.js";
 
-const DEFAULT_UPSTREAM_ORIGIN = "https://z-lib.sk";
+// The community access guide currently lists z-lib.fm as a working mirror;
+// z-lib.sk is blackholing requests from the deployment probe instead of
+// returning the Z-Library challenge or search page.
+const DEFAULT_UPSTREAM_ORIGIN = "https://z-lib.fm";
 const INTERNAL_PREFIX = "/__z/";
 
 const URL_ATTRIBUTES = [
@@ -328,6 +337,7 @@ function buildIpfsProxyUrl(cid, path, filename, gatewayId) {
 // concurrent identical searches share one upstream fetch instead of
 // multiplying the request rate the upstream rate-limiter sees.
 const inflightZSearchRequests = new Map();
+let inflightOriginScan = null;
 
 function inflightZSearch(key, task) {
   const existing = inflightZSearchRequests.get(key);
@@ -341,9 +351,42 @@ function inflightZSearch(key, task) {
   return promise;
 }
 
+async function runOriginScan(env) {
+  if (inflightOriginScan) {
+    return inflightOriginScan;
+  }
+
+  inflightOriginScan = scanOrigins(env)
+    .then(async (payload) => {
+      const persisted = Boolean(env?.ORIGIN_HEALTH);
+      const result = { ...payload, persisted };
+      if (persisted) {
+        await writeOriginHealth(env.ORIGIN_HEALTH, result);
+      }
+      return result;
+    })
+    .finally(() => {
+      inflightOriginScan = null;
+    });
+  return inflightOriginScan;
+}
+
 async function handleInternalRequest(request, requestUrl, env) {
   if (requestUrl.pathname === "/__z/api/challenge") {
     return handleChallengeSubmission(request, env);
+  }
+
+  if (requestUrl.pathname === "/__z/api/origins/scan") {
+    if (request.method !== "POST") {
+      return methodNotAllowed("POST");
+    }
+    try {
+      const payload = await runOriginScan(env);
+      return jsonResponse(payload, { headers: { "Cache-Control": "no-store" } });
+    } catch (error) {
+      console.error("Origin health scan failed", error);
+      return jsonResponse({ error: "Origin scan failed" }, { status: 502 });
+    }
   }
 
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -407,6 +450,21 @@ async function handleInternalRequest(request, requestUrl, env) {
     // Open tabs poll this to detect deploys and reload onto fresh assets.
     return jsonResponse(
       { version: ASSETS_VERSION, commit: BUILD_COMMIT },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  if (requestUrl.pathname === "/__z/api/origins") {
+    if (request.method !== "GET") {
+      return methodNotAllowed();
+    }
+    return jsonResponse(
+      (await readOriginHealth(env?.ORIGIN_HEALTH)) || {
+        checkedAt: null,
+        origins: configuredOrigins(env),
+        results: [],
+        persisted: Boolean(env?.ORIGIN_HEALTH),
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   }
@@ -989,5 +1047,13 @@ export default {
     }
 
     return proxyRequest(request, env);
+  },
+
+  scheduled(_event, env, ctx) {
+    ctx.waitUntil(
+      runOriginScan(env).catch((error) => {
+        console.error("Scheduled origin health scan failed", error);
+      }),
+    );
   },
 };
