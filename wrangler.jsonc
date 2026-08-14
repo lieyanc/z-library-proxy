@@ -11,7 +11,7 @@
   // namespace ID here as a `kv_namespaces` binding named ORIGIN_HEALTH.
   "vars": {
     "ALLOWED_IPFS_CIDS": "*",
-    "UPSTREAM_ORIGIN": "https://z-lib.fm",
-    "UPSTREAM_ORIGINS": "https://z-lib.fm,https://z-lib.gd,https://z-lib.gl,https://z-lib.sk"
+    "UPSTREAM_ORIGIN": "https://z-lib.sk",
+    "UPSTREAM_ORIGINS": "https://z-lib.sk,https://z-lib.fm,https://z-lib.gd,https://z-lib.gl"
   }
 }

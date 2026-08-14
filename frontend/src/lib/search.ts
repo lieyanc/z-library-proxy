@@ -132,6 +132,9 @@ export interface OriginHealthPayload {
   checkedAt: string | null
   origins: string[]
   results: OriginHealthResult[]
+  activeOrigin: string | null
+  selectionMode: "auto" | "manual"
+  selectedAt?: string | null
   persisted?: boolean
 }
 
@@ -265,6 +268,22 @@ export async function scanOriginHealth(): Promise<OriginHealthPayload> {
   })
   if (!response.ok) {
     throw new Error(`Origin scan failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function selectOrigin(origin: string | null): Promise<OriginHealthPayload> {
+  const response = await fetch("/__z/api/origins/select", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(origin ? { origin } : { mode: "auto" }),
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(payload?.error || `Origin selection failed with status ${response.status}`)
   }
   return response.json()
 }

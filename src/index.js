@@ -9,6 +9,9 @@ import {
   proxyIpfsDownload,
 } from "./ipfs.js";
 import {
+  activeOriginFromHealth,
+  applyAutomaticSelection,
+  applyManualSelection,
   configuredOrigins,
   readOriginHealth,
   scanOrigins,
@@ -26,10 +29,9 @@ import {
   THEME_INIT_SCRIPT_SHA256,
 } from "./ui.js";
 
-// The community access guide currently lists z-lib.fm as a working mirror;
-// z-lib.sk is blackholing requests from the deployment probe instead of
-// returning the Z-Library challenge or search page.
-const DEFAULT_UPSTREAM_ORIGIN = "https://z-lib.fm";
+// z-lib.sk remains the configured fallback; health checks can select another
+// configured mirror automatically when it responds faster and successfully.
+const DEFAULT_UPSTREAM_ORIGIN = "https://z-lib.sk";
 const INTERNAL_PREFIX = "/__z/";
 
 const URL_ATTRIBUTES = [
@@ -81,6 +83,17 @@ function parseUpstreamOrigin(value) {
   }
 
   return upstream;
+}
+
+function configuredFallbackOrigin(env) {
+  return parseUpstreamOrigin(env?.UPSTREAM_ORIGIN).origin;
+}
+
+async function resolveUpstreamOrigin(env) {
+  const fallback = configuredFallbackOrigin(env);
+  const health = await readOriginHealth(env?.ORIGIN_HEALTH);
+  const selected = activeOriginFromHealth(health, fallback) || fallback;
+  return parseUpstreamOrigin(selected);
 }
 
 export function buildUpstreamUrl(requestUrl, upstream) {
@@ -356,7 +369,11 @@ async function runOriginScan(env) {
     return inflightOriginScan;
   }
 
-  inflightOriginScan = scanOrigins(env)
+  const previousHealthPromise = readOriginHealth(env?.ORIGIN_HEALTH);
+  inflightOriginScan = Promise.all([scanOrigins(env), previousHealthPromise])
+    .then(([payload, previous]) =>
+      applyAutomaticSelection(payload, previous, env?.UPSTREAM_ORIGIN || DEFAULT_UPSTREAM_ORIGIN),
+    )
     .then(async (payload) => {
       const persisted = Boolean(env?.ORIGIN_HEALTH);
       const result = { ...payload, persisted };
@@ -369,6 +386,83 @@ async function runOriginScan(env) {
       inflightOriginScan = null;
     });
   return inflightOriginScan;
+}
+
+function emptyOriginHealth(env) {
+  const origins = configuredOrigins(env);
+  let fallback = null;
+  try {
+    fallback = configuredFallbackOrigin(env);
+  } catch {
+    fallback = new URL(DEFAULT_UPSTREAM_ORIGIN).origin;
+  }
+  return {
+    checkedAt: null,
+    origins,
+    results: [],
+    activeOrigin: activeOriginFromHealth({ origins }, fallback),
+    selectionMode: "auto",
+    selectedAt: null,
+  };
+}
+
+function currentOriginHealth(env, stored) {
+  const fallback = (() => {
+    try {
+      return configuredFallbackOrigin(env);
+    } catch {
+      return new URL(DEFAULT_UPSTREAM_ORIGIN).origin;
+    }
+  })();
+  const origins = configuredOrigins(env);
+  const base = stored && typeof stored === "object" ? stored : emptyOriginHealth(env);
+  const results = Array.isArray(base.results)
+    ? base.results.filter((result) => origins.includes(result?.origin))
+    : [];
+  const payload = { ...base, origins, results };
+  const activeOrigin = activeOriginFromHealth(payload, fallback);
+  const manual = payload.selectionMode === "manual" && origins.includes(activeOrigin);
+  return {
+    ...payload,
+    activeOrigin,
+    selectionMode: manual ? "manual" : "auto",
+    persisted: Boolean(env?.ORIGIN_HEALTH),
+  };
+}
+
+async function handleOriginSelection(request, env) {
+  if (request.method !== "POST") {
+    return methodNotAllowed("POST");
+  }
+  if (!env?.ORIGIN_HEALTH) {
+    return jsonResponse(
+      { error: "Origin selection requires the ORIGIN_HEALTH KV binding" },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const auto = body?.mode === "auto" || body?.origin === null || body?.origin === "";
+  if (!auto && typeof body?.origin !== "string") {
+    return jsonResponse({ error: "Origin must be a configured HTTPS origin" }, { status: 400 });
+  }
+
+  const stored = await readOriginHealth(env.ORIGIN_HEALTH);
+  const base = currentOriginHealth(env, stored);
+  try {
+    const selected = applyManualSelection(base, auto ? null : body.origin, env.UPSTREAM_ORIGIN);
+    const result = { ...selected, persisted: true };
+    await writeOriginHealth(env.ORIGIN_HEALTH, result);
+    return jsonResponse(result, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    return jsonResponse({ error: error instanceof Error ? error.message : "Invalid origin" }, { status: 400 });
+  }
 }
 
 async function handleInternalRequest(request, requestUrl, env) {
@@ -387,6 +481,10 @@ async function handleInternalRequest(request, requestUrl, env) {
       console.error("Origin health scan failed", error);
       return jsonResponse({ error: "Origin scan failed" }, { status: 502 });
     }
+  }
+
+  if (requestUrl.pathname === "/__z/api/origins/select") {
+    return handleOriginSelection(request, env);
   }
 
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -458,15 +556,9 @@ async function handleInternalRequest(request, requestUrl, env) {
     if (request.method !== "GET") {
       return methodNotAllowed();
     }
-    return jsonResponse(
-      (await readOriginHealth(env?.ORIGIN_HEALTH)) || {
-        checkedAt: null,
-        origins: configuredOrigins(env),
-        results: [],
-        persisted: Boolean(env?.ORIGIN_HEALTH),
-      },
-      { headers: { "Cache-Control": "no-store" } },
-    );
+    return jsonResponse(currentOriginHealth(env, await readOriginHealth(env?.ORIGIN_HEALTH)), {
+      headers: { "Cache-Control": "no-store" },
+    });
   }
 
   if (requestUrl.pathname === "/__z/api/search") {    const query = (requestUrl.searchParams.get("q") || "").trim();
@@ -486,7 +578,13 @@ async function handleInternalRequest(request, requestUrl, env) {
       return jsonResponse({ error: "Missing search query" }, { status: 400 });
     }
     const page = Math.min(Math.max(Number.parseInt(requestUrl.searchParams.get("page") || "1", 10) || 1, 1), 100);
-    const cacheKey = `https://zlib-cache.local/v${ASSETS_VERSION}/__z/api/zsearch?q=${encodeURIComponent(query)}&page=${page}`;
+    let cacheOrigin = env?.UPSTREAM_ORIGIN || DEFAULT_UPSTREAM_ORIGIN;
+    try {
+      cacheOrigin = (await resolveUpstreamOrigin(env)).origin;
+    } catch {
+      // Keep the normal search error handling for malformed upstream config.
+    }
+    const cacheKey = `https://zlib-cache.local/v${ASSETS_VERSION}/__z/api/zsearch?origin=${encodeURIComponent(cacheOrigin)}&q=${encodeURIComponent(query)}&page=${page}`;
     const cache = globalThis.caches?.default ?? null;
 
     // Serve a previously cached success without touching upstream — repeated
@@ -501,7 +599,7 @@ async function handleInternalRequest(request, requestUrl, env) {
 
     // Merge concurrent identical searches into one upstream fetch.
     const results = await inflightZSearch(cacheKey, () =>
-      searchZlibCatalog(query, page, env, readZlibSession(request)),
+      searchZlibCatalog(query, page, env, readZlibSession(request), cacheOrigin),
     );
     if (results.challenge) {
       return jsonResponse(results, {
@@ -720,8 +818,8 @@ const ZLIB_FETCH_HEADERS = {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
 };
 
-async function fetchZlibPage(pathAndQuery, env, session = null) {
-  const upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
+async function fetchZlibPage(pathAndQuery, env, session = null, upstreamOrigin = null) {
+  const upstream = upstreamOrigin ? parseUpstreamOrigin(upstreamOrigin) : await resolveUpstreamOrigin(env);
   const response = await fetchUpstream(`${upstream.origin}${pathAndQuery}`, {
     headers: ZLIB_FETCH_HEADERS,
     redirect: "manual",
@@ -734,7 +832,7 @@ async function fetchZlibPage(pathAndQuery, env, session = null) {
   return response.text();
 }
 
-async function searchZlibCatalog(query, page, env, session = null) {
+async function searchZlibCatalog(query, page, env, session = null, upstreamOrigin = null) {
   const normalizedQuery = query.trim().slice(0, 200);
   let results = [];
   let ok = false;
@@ -743,7 +841,12 @@ async function searchZlibCatalog(query, page, env, session = null) {
   let rateLimited = false;
   try {
     const pageSuffix = page > 1 ? `?page=${page}` : "";
-    const html = await fetchZlibPage(`/s/${encodeURIComponent(normalizedQuery)}${pageSuffix}`, env, session);
+    const html = await fetchZlibPage(
+      `/s/${encodeURIComponent(normalizedQuery)}${pageSuffix}`,
+      env,
+      session,
+      upstreamOrigin,
+    );
     results = parseZlibSearch(html);
     ok = true;
   } catch (caught) {
@@ -784,7 +887,7 @@ async function fetchZlibBook(bookPath, env, session = null) {
 // through /__z/dl/, which does.
 async function fetchZlibFormats(bookId, env, session = null) {
   try {
-    const upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
+    const upstream = await resolveUpstreamOrigin(env);
     const accountCookies = (env.ZLIB_ACCOUNT_COOKIES || "").trim();
     const response = await fetchUpstream(
       `${upstream.origin}/papi/book/${bookId}/formats`,
@@ -829,7 +932,7 @@ async function handleAccountDownload(request, requestUrl, env) {
 
   let upstream;
   try {
-    upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
+    upstream = await resolveUpstreamOrigin(env);
   } catch (error) {
     console.error(error);
     return new Response("Worker configuration error", { status: 500 });
@@ -957,21 +1060,21 @@ async function proxyCoverImage(request, requestUrl, env) {
   });
 }
 
-function upstreamHostOrDefault(env) {
+async function upstreamHostOrDefault(env) {
   try {
-    return parseUpstreamOrigin(env.UPSTREAM_ORIGIN).host;
+    return (await resolveUpstreamOrigin(env)).host;
   } catch {
     return new URL(DEFAULT_UPSTREAM_ORIGIN).host;
   }
 }
 
-function handleHomeRequest(request, requestUrl, env) {
+async function handleHomeRequest(request, requestUrl, env) {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return null;
   }
 
   const query = requestUrl.searchParams.get("q") || "";
-  const body = request.method === "HEAD" ? null : renderHomePage(query, upstreamHostOrDefault(env));
+  const body = request.method === "HEAD" ? null : renderHomePage(query, await upstreamHostOrDefault(env));
   return new Response(body, {
     headers: {
       "Cache-Control": "no-store",
@@ -987,7 +1090,7 @@ function handleHomeRequest(request, requestUrl, env) {
 async function proxyRequest(request, env) {
   let upstream;
   try {
-    upstream = parseUpstreamOrigin(env.UPSTREAM_ORIGIN);
+    upstream = await resolveUpstreamOrigin(env);
   } catch (error) {
     console.error(error);
     return new Response("Worker configuration error", { status: 500 });
@@ -1032,7 +1135,7 @@ async function proxyRequest(request, env) {
 }
 
 export default {
-  fetch(request, env) {
+  async fetch(request, env) {
     const requestUrl = new URL(request.url);
 
     if (requestUrl.pathname.startsWith(INTERNAL_PREFIX)) {
@@ -1040,7 +1143,7 @@ export default {
     }
 
     if (requestUrl.pathname === "/") {
-      const homeResponse = handleHomeRequest(request, requestUrl, env);
+      const homeResponse = await handleHomeRequest(request, requestUrl, env);
       if (homeResponse) {
         return homeResponse;
       }

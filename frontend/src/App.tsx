@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import {
   BookOpenIcon,
+  CheckIcon,
   CircleCheckIcon,
   CircleXIcon,
   Clock3Icon,
@@ -9,6 +10,7 @@ import {
   SearchIcon,
   SearchXIcon,
   ShieldAlertIcon,
+  ZapIcon,
 } from "lucide-react"
 
 import { BookCard } from "@/components/book-card"
@@ -57,6 +59,7 @@ import {
   scanOriginHealth,
   searchBooks,
   searchZlib,
+  selectOrigin,
   sourceSearchUrl,
   ChallengeFailedError,
 } from "@/lib/search"
@@ -189,18 +192,25 @@ function OriginHealthSection({
   loading,
   error,
   onRescan,
+  onSelect,
+  selecting,
 }: {
   payload: OriginHealthPayload | null
   loading: boolean
   error: string | null
   onRescan: () => void
+  onSelect: (origin: string | null) => void
+  selecting: boolean
 }) {
   const results = new Map((payload?.results ?? []).map((result) => [result.origin, result]))
   const origins = payload?.origins ?? []
+  const activeOrigin = payload?.activeOrigin ?? null
+  const activeHost = activeOrigin?.replace(/^https:\/\//, "") || "未选择"
+  const isManual = payload?.selectionMode === "manual"
 
   return (
     <section aria-labelledby="origin-health-title" className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <Globe2Icon className="size-4 text-muted-foreground" aria-hidden="true" />
           <h2 id="origin-health-title" className="text-lg font-semibold">
@@ -210,17 +220,33 @@ function OriginHealthSection({
             {formatCheckedAt(payload?.checkedAt ?? null)}
           </span>
         </div>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={onRescan}
-          disabled={loading}
-          aria-label="重新扫描源站"
-          title="重新扫描源站"
-        >
-          <RefreshCwIcon className={loading ? "animate-spin" : undefined} />
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={isManual ? "outline" : "secondary"}
+            size="sm"
+            onClick={() => onSelect(null)}
+            disabled={selecting || !isManual}
+            title="恢复自动选择最快源站"
+          >
+            <ZapIcon />
+            自动选择最快
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={onRescan}
+            disabled={loading || selecting}
+            aria-label="重新扫描源站"
+            title="重新扫描源站"
+          >
+            <RefreshCwIcon className={loading ? "animate-spin" : undefined} />
+          </Button>
+        </div>
       </div>
+      <p className="text-sm text-muted-foreground">
+        当前上游 <span className="font-mono text-foreground">{activeHost}</span>
+        {isManual ? " · 手动选择" : " · 自动选择最快"}
+      </p>
       {error && <p className="text-sm text-destructive">{error}</p>}
       {payload?.persisted === false && (
         <p className="text-sm text-amber-600 dark:text-amber-400">
@@ -236,6 +262,7 @@ function OriginHealthSection({
             const status = originStatus(result)
             const StatusIcon = status.Icon
             const host = result?.host ?? origin.replace(/^https:\/\//, "")
+            const active = activeOrigin === origin
             return (
               <li key={origin} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border p-3">
                 <div className="min-w-0">
@@ -245,10 +272,23 @@ function OriginHealthSection({
                     {result?.status != null ? ` · HTTP ${result.status}` : ""}
                   </p>
                 </div>
-                <span className={`flex shrink-0 items-center gap-1 text-xs font-medium ${status.className}`}>
-                  <StatusIcon className="size-4" aria-hidden="true" />
-                  {status.label}
-                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className={`flex items-center gap-1 text-xs font-medium ${status.className}`}>
+                    <StatusIcon className="size-4" aria-hidden="true" />
+                    {status.label}
+                  </span>
+                  <Button
+                    variant={active ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => onSelect(origin)}
+                    disabled={selecting || active}
+                    aria-pressed={active}
+                    title={active ? "当前使用的源站" : `切换到 ${host}`}
+                  >
+                    {active ? <CheckIcon /> : null}
+                    {active ? "当前使用" : "切换"}
+                  </Button>
+                </div>
               </li>
             )
           })}
@@ -316,6 +356,7 @@ export default function App({
   const [originHealth, setOriginHealth] = useState<OriginHealthPayload | null>(null)
   const [originHealthLoading, setOriginHealthLoading] = useState(true)
   const [originHealthError, setOriginHealthError] = useState<string | null>(null)
+  const [originSelecting, setOriginSelecting] = useState(false)
 
   const refreshOriginHealth = useCallback(async (scan = false) => {
     setOriginHealthLoading(true)
@@ -327,6 +368,18 @@ export default function App({
       setOriginHealthError(error instanceof Error ? error.message : "源站状态读取失败")
     } finally {
       setOriginHealthLoading(false)
+    }
+  }, [])
+
+  const changeOrigin = useCallback(async (origin: string | null) => {
+    setOriginSelecting(true)
+    setOriginHealthError(null)
+    try {
+      setOriginHealth(await selectOrigin(origin))
+    } catch (error) {
+      setOriginHealthError(error instanceof Error ? error.message : "源站切换失败")
+    } finally {
+      setOriginSelecting(false)
     }
   }, [])
 
@@ -524,6 +577,8 @@ export default function App({
           loading={originHealthLoading}
           error={originHealthError}
           onRescan={rescanOrigins}
+          onSelect={changeOrigin}
+          selecting={originSelecting}
         />
         {state.status !== "idle" && (
           <section aria-live="polite" className="flex flex-col gap-4">
